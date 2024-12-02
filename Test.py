@@ -15,6 +15,8 @@ class CustomEnv(MultiGridEnv):
     actions = ["up", "down", "left", "right", "stay"]  # Define available actions here
 
     def __init__(self, render_mode="human", **kwargs):
+        self,
+        goal_pos: int
         super().__init__(render_mode=render_mode, **kwargs)
 
     def _gen_grid(self, width: int, height: int):
@@ -35,6 +37,7 @@ class CustomEnv(MultiGridEnv):
         # Place a goal object at a specific position
         goal_pos = (width - 2, height - 2)
         self.put_obj(Goal(), *goal_pos)
+        self.goal_pos = goal_pos
 
         # Place agents at the top-left corner
         for agent in self.agents:
@@ -43,7 +46,7 @@ class CustomEnv(MultiGridEnv):
 
 
 class ReplayBuffer:
-    def __init__(                                                                   #Why was this init and not __init__
+    def __init__(                                                    # Why was this init and not __init__
         self,
         buffer_size: int,
         state_size: int,
@@ -69,32 +72,32 @@ class ReplayBuffer:
         else:
             self.replay_buffer = deque(maxlen=self.buffer_size)
 
-    def __len__(self):
+    def __len__(self):                                               # Length of replay buffer
         return len(self.replay_buffer)
 
-    def add(self, experience: tuple):
+    def add(self, experience: tuple):                                # Add to replay buffer
 
-        if self.priority_buffer:
-            experience = TensorDict(
-                {
-                    "state": experience[0].view(1, self.state_size),
-                    "action": torch.tensor(experience[1]).view(1, 1),
-                    "reward": torch.tensor(experience[2]).view(1, 1),
-                    "next_state": experience[3].view(1, self.state_size),
-                    "done": torch.tensor(experience[4], dtype=float).view(1, 1),
-                },
-                batch_size=[1],
-            )
-
-            self.replay_buffer.add(experience)
+        if self.priority_buffer:                                                    # Priority Buffer Ignored
+            experience = TensorDict(                                                    # |
+                {                                                                       # |
+                    "state": experience[0].view(1, self.state_size),                    # |
+                    "action": torch.tensor(experience[1]).view(1, 1),                   # |
+                    "reward": torch.tensor(experience[2]).view(1, 1),                   # |
+                    "next_state": experience[3].view(1, self.state_size),               # |
+                    "done": torch.tensor(experience[4], dtype=float).view(1, 1),        # |
+                },                                                                      # |
+                batch_size=[1],                                                         # |
+            )                                                                           # |
+                                                                                        # |
+            self.replay_buffer.add(experience)                                      # Priority Buffer Ignored
         else:
-            self.replay_buffer.append(experience)
+            self.replay_buffer.append(experience)                                   # Add Experience
 
     def sample(self):
-        if self.priority_buffer:
-            return self.replay_buffer.sample(self.batch_size, return_info=True)
+        if self.priority_buffer:                                                    # Priority Buffer Ignored
+            return self.replay_buffer.sample(self.batch_size, return_info=True)     # Priority Buffer Ignored
 
-        batch = random.sample(self.replay_buffer, self.batch_size)
+        batch = random.sample(self.replay_buffer, self.batch_size)                  # Get Random batch of expirences
         return batch, None
 
     def set_priorities(self, indices, errors):
@@ -130,35 +133,38 @@ class DeepQ(nn.Module):
         self.double_network = double_network
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.main_model = nn.Sequential(
+        self.main_model = nn.Sequential(                                # Network Architecture
             nn.LayerNorm(num_inputs),
             nn.Linear(num_inputs, 64),
             nn.ReLU(),
             nn.Linear(64, 64),
             nn.ReLU(),
             nn.Linear(64, num_actions),
-        ).to(self.device)
+        ).to(self.device)                                               # Network Architecture
 
-        self.target_model = nn.Sequential(
-            nn.LayerNorm(num_inputs),
-            nn.Linear(num_inputs, 64),
+        self.target_model = nn.Sequential(                              # Target Model Architecture
+            nn.LayerNorm(num_inputs),                                   # Updated less frequently
+            nn.Linear(num_inputs, 64),                                  # Used to stabalize model
             nn.ReLU(),
             nn.Linear(64, 64),
             nn.ReLU(),
             nn.Linear(64, num_actions),
-        ).to(self.device)
+        ).to(self.device)                                               # Target Model Architecture
+
+        self.main_model = self.main_model.float()
+        self.target_model = self.target_model.float()
 
         # load main model parameters into target model
         self.target_model.load_state_dict(self.main_model.state_dict())
 
         if self.learning_rate is not None:
-            self.main_optimizer = optim.Adam(
-                self.main_model.parameters(), lr=self.learning_rate
+            self.main_optimizer = optim.Adam(                           # Initializing Adam Optimizer
+                self.main_model.parameters(), lr=self.learning_rate     # Fetching parameters
             )
 
         # replay memory
         if self.replay_memory_size is not None:
-            self.replay_memory = ReplayBuffer(
+            self.replay_memory = ReplayBuffer(                          # Set replay memory as Replay Buffer
                 buffer_size=self.replay_memory_size,
                 state_size=num_inputs,
                 batch_size=self.batch_size,
@@ -170,12 +176,13 @@ class DeepQ(nn.Module):
         self.target_update_counter = 0
 
     def forward_main(self, input_tensor):
-        input_tensor = input_tensor.to(self.device)
+        input_tensor = input_tensor.to(self.device).float()
         return self.main_model(input_tensor)
 
     def forward_target(self, input_tensor):
-        input_tensor = input_tensor.to(self.device)
+        input_tensor = input_tensor.to(self.device).float()
         return self.target_model(input_tensor)
+
 
     # update replay memory after every step
     # transition: (observation, action, reward, new observation, done)
@@ -184,15 +191,15 @@ class DeepQ(nn.Module):
 
     def train(self, terminal_state):
         # Start training only if enough samples in replay memory
-        if len(self.replay_memory) < self.minimum_replay_memory_size:
+        if len(self.replay_memory) < self.minimum_replay_memory_size:           # Only starts training once enough experiences have been collected
             return None
 
         # get batch from replay memory
         importance_weights = None
         sample_indices = None
-        batch, info = self.replay_memory.sample()
-        if info is not None:
-            importance_weights = info["_weight"]
+        batch, info = self.replay_memory.sample()       # retrieves sampled experiences, info is for prioritized replay
+        if info is not None:                                                                    # Prioritized Replay
+            importance_weights = info["_weight"]                                                        # |
             sample_indices = info["index"]
             current_states = (
                 batch["state"].reshape(self.batch_size, self.num_inputs).to(self.device)
@@ -204,48 +211,43 @@ class DeepQ(nn.Module):
                 .reshape(self.batch_size, self.num_inputs)
                 .to(self.device)
             )
-            dones = batch["done"].reshape(self.batch_size).to(self.device)
+            dones = batch["done"].reshape(self.batch_size).to(self.device)                      # Prioritized Replay
 
         else:
-            current_states = torch.stack([transition[0] for transition in batch]).to(
-                self.device
-            )
-            actions = torch.tensor([transition[1] for transition in batch]).to(
-                self.device
-            )
+            current_states = torch.stack([torch.tensor(transition[0], dtype=torch.float32) for transition in batch]).to(self.device)
+
+            actions = torch.tensor([transition[1] for transition in batch], dtype=torch.long).to(self.device)
+            
             rewards = (
-                torch.tensor([transition[2] for transition in batch])
+                torch.tensor([transition[2] for transition in batch], dtype=torch.float32)
                 .float()
                 .to(self.device)
             )
-            next_states = torch.stack([transition[3] for transition in batch]).to(
-                self.device
-            )
-            dones = (
-                torch.tensor([transition[4] for transition in batch])
-                .float()
-                .to(self.device)
-            )
+            next_states = torch.stack([torch.tensor(transition[3], dtype=torch.float32) for transition in batch]).to(self.device)
+            dones = torch.tensor(
+                [float(transition[4]) for transition in batch],
+                dtype=torch.float32
+            ).to(self.device)
 
         # get current states from the batch and query into main model
         current_qs_for_action = (
-            self.forward_main(current_states).gather(1, actions.unsqueeze(1)).squeeze(1)
+            self.forward_main(current_states).gather(1, actions.unsqueeze(1)).squeeze(1)        # Predict Q-Values for selected actions given states in batch
         )
 
         # get future states from minibatch and query from target model
-        with torch.no_grad():
+        with torch.no_grad():                                                                   # Temporarily disables gradient computation
             if self.double_network:
                 # get future states from minibatch and action indices from main model
-                main_future_best_qs_action_indices = self.forward_main(
+                main_future_best_qs_action_indices = self.forward_main(                         # Find action with highest Q-Value in Next state
                     next_states
                 ).argmax(dim=1, keepdim=True)
-                target_q_values = self.forward_target(next_states)
+                target_q_values = self.forward_target(next_states)                              # Uses target network to find Q-Value of actions found from above
                 target_selected_q_values = torch.gather(
                     input=target_q_values,
                     dim=1,
                     index=main_future_best_qs_action_indices,
                 ).squeeze()
-                targets = rewards + (
+                targets = rewards + (                                                           # Updates Q-Value using Bellman Equation
                     self.discount * target_selected_q_values * (1 - dones)
                 )
             else:
@@ -254,27 +256,27 @@ class DeepQ(nn.Module):
                 ]  # gets max q value from new state
                 targets = rewards + (self.discount * future_best_qs * (1 - dones))
 
-        errors = self.get_errors(
-            online_output=current_qs_for_action, target_output=targets
-        )
-
-        if importance_weights is not None:
+        errors = self.get_errors(                                                               
+            online_output=current_qs_for_action, target_output=targets      # current_qs_for_action:  
+        )                                                                       # estimated earlier by main network (the agent's current estimat of Q-values)
+                                                                            # target_outputs:
+        if importance_weights is not None:                                      # new Q-Values from Bellman
             loss = torch.mean((errors * importance_weights) ** 2)
         else:
-            loss = torch.mean(errors**2)
+            loss = torch.mean(errors**2)                                    # Calculates Loss
 
-        self.replay_memory.set_priorities(sample_indices, errors.detach())
+        self.replay_memory.set_priorities(sample_indices, errors.detach())  # Upate Priority
         self.main_optimizer.zero_grad()
-        loss.backward()
-        self.main_optimizer.step()
+        loss.backward()                                                     # Backpropogation
+        self.main_optimizer.step()                                          # Backpropogation
 
         # Update target network counter every episode
-        if terminal_state:
+        if terminal_state:                                                  # Counts number of episodes
             self.target_update_counter += 1
 
         # If counter reaches set value,
         # update target network with weights of main network
-        if self.target_update_counter > self.update_target_every:
+        if self.target_update_counter > self.update_target_every:           # Update target network to match the main network
             self.target_model.load_state_dict(self.main_model.state_dict())
             self.target_update_counter = 0
 
@@ -311,7 +313,7 @@ class DQNAgent(Agent):
             priority_buffer=dqn_params.get("priority_buffer", False),
             double_network=dqn_params.get("double_network", True),
         )
-        self.epsilon = 1.0  # Exploration rate
+        self.epsilon = .99  # Exploration rate
         self.epsilon_decay = 0.995
         self.min_epsilon = 0.01
 
@@ -320,9 +322,10 @@ class DQNAgent(Agent):
         Select an action using epsilon-greedy strategy.
         """
         if np.random.rand() < self.epsilon:
+            #print("                         RANDOM")
             return np.random.choice(self.action_size)  # Explore
-        state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
-        q_values = self.dqn.get_qs(state_tensor)
+        state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)                        # Converts state to tensor
+        q_values = self.dqn.get_qs(state_tensor)                                                    # Computes Q-Values using main network
         return torch.argmax(q_values).item()  # Exploit
 
     def decay_epsilon(self):
@@ -380,17 +383,19 @@ if __name__ == "__main__":
     import time
 
     # Define environment parameters
-    grid_size = 10
-    num_agents = 2
-    state_size = grid_size * grid_size * 3  # Assuming 3 channels per grid cell
+    environ_actions = ["up", "down", "left", "right", "stay"]
+    view_size = 7                                               # Default setting that seems hard to change
+    grid_size = 7
+    num_agents = 1
+    state_size = view_size * view_size * 3  # Assuming 3 channels per grid cell
     action_size = len(CustomEnv.actions)  # Use predefined actions here
 
     # Initialize agents with DeepQ
     agents = [
-        DQNAgent(index=i, state_size=state_size, action_size=action_size, discount=0.99)
+        DQNAgent(index=i, state_size=state_size, action_size=action_size,  discount=0.99)
         for i in range(num_agents)
     ]
-
+    
     # Create the environment
     env = CustomEnv(grid_size=grid_size, agents=agents, render_mode="human")
 
@@ -399,44 +404,67 @@ if __name__ == "__main__":
 
     # Render the initial environment
     env.render()
-    time.sleep(1)  # Pause to view the initial state
+    #time.sleep(1)  # Pause to view the initial state
 
     # Training loop
-    episodes = 100
+    episodes = 100                                                               # Number of Episodes to do
     for episode in range(episodes):
-        obs, infos = env.reset()
-        total_rewards = [0] * num_agents
-        done = {agent.index: False for agent in agents}
+        steps = 0
+        obs, infos = env.reset()                    
+        total_rewards = [0] * num_agents        
+        done = {agent.index: False for agent in agents}                         # Dictionary to track whether each agent has reach a terminal state
 
-        while not all(done.values()):
+        while not any(done.values()):
+        #while not any(done.values()):
             actions = {}
+            #print("Top-------------------------------------------")
             for agent in agents:
-                # Convert observation to 1D array for the agent
-                agent_state = obs[agent.index]["image"].flatten()
-                actions[agent.index] = agent.select_action(agent_state)
+                #print("Agent: ", agent.index, "Done: ", done[agent.index])
+                if not done[agent.index]:  # Only process agents that are not done
+                    #print("Here")
+                    # Convert observation to 1D array for the agent
+                    agent_state = obs[agent.index]["image"].flatten()
+                    actions[agent.index] = agent.select_action(agent_state)         # Agent Action selection
+                    
+                    #print("Agent: ", agent.index, " Action: ", environ_actions[actions[agent.index]])
+                else:
+                    #print("There")
+                    actions[agent.index] = None
+                
 
             # Step the environment
-            obs, rewards, terminations, truncations, infos = env.step(actions)
-
+            obs, rewards, terminations, truncations, infos = env.step(actions)  # Step
+            steps += 1
+            #print("Step: ", steps)
             # Update replay memory and train each agent
             for agent in agents:
-                agent_state = obs[agent.index]["image"].flatten()
-                next_state = obs[agent.index]["image"].flatten()
-                agent.dqn.update_replay_memory(
-                    (agent_state, actions[agent.index], rewards[agent.index], next_state, terminations[agent.index])
-                )
-                loss = agent.dqn.train(terminal_state=terminations[agent.index])
-                total_rewards[agent.index] += rewards[agent.index]
-
+                if not done[agent.index]:  # Skip training for terminal agents
+                    #print("Agent: ", agent.index, "Position: ", agent.pos)
+                    #print("Agent: ", agent.index, "Terminations: ", terminations[agent.index])
+                    agent_state = obs[agent.index]["image"].flatten()
+                    next_state = obs[agent.index]["image"].flatten()
+                    agent.dqn.update_replay_memory(                                 # Stores agent trainsition in replay bugger
+                        (agent_state, actions[agent.index], rewards[agent.index], next_state, terminations[agent.index])
+                    )
+                    #print("Training!")
+                    agent_terminal_state = torch.tensor(terminations[agent.index], dtype=torch.float32).unsqueeze(0)
+                    loss = agent.dqn.train(terminal_state=agent_terminal_state)    # Trains agent
+                    total_rewards[agent.index] += rewards[agent.index]                  # accumulates reward
+                    
+                    if env.goal_pos == agent.pos:
+                        done[agent.index] = True
+                        #print("Agent: ", agent.index, "Done: ", done[agent.index])
+                        time.sleep(1)
+                #print("Agent: ", agent.index, "Terminations: ", terminations[agent.index])
             # Render environment (optional)
             env.render()
-            time.sleep(0.1)
-
+            #time.sleep(0.001)
+            #print("Bottom---------------------------------------")
         # Decay exploration rate for each agent
         for agent in agents:
             agent.decay_epsilon()
 
         print(f"Episode {episode + 1}: Total Rewards = {total_rewards}")
-
+        print(agents[0].epsilon)
     # Close the environment
     env.close()
