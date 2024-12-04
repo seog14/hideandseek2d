@@ -5,6 +5,7 @@ import random
 from multigrid.envs import gen_env
 from multigrid import MultiGridEnv
 from multigrid.core import Action, Grid, MissionSpace
+from multigrid.core.constants import Direction
 from multigrid.core.constants import *
 from multigrid.core.world_object import *
 
@@ -23,8 +24,8 @@ class HideAndSeekEnv(MultiGridEnv):
         self,
         size: int = 15,
         max_steps: int = 100,
-        num_agents: int = 1,
-        percent_trees: int = .1,
+        num_agents: int = 2,
+        percent_trees: float = .1,
         joint_reward: bool = False,
         **kwargs):
         
@@ -47,7 +48,6 @@ class HideAndSeekEnv(MultiGridEnv):
 
         # Create empty grid
         self.grid = Grid(self.size, self.size)
-        print(self.grid_template)
         
         for i in range(len(self.grid_template)): 
             for j in range(len(self.grid_template[i])): 
@@ -64,11 +64,5 @@ class HideAndSeekEnv(MultiGridEnv):
         
         # Place agents in the center
         for agent in self.agents:
-            self.place_agent(agent, top=self.seeker, size=(1,1))
-
-        print("im done")
-    def step():
-        pass 
-        
-
-        
+            agent.state.pos = self.seeker
+            agent.state.dir = Direction.up
