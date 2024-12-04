@@ -614,3 +614,171 @@ class Box(WorldObj):
 
         # Horizontal slit
         fill_coords(img, point_in_rect(0.16, 0.84, 0.47, 0.53), self.color.rgb())
+
+
+# The Door class but without key
+class Tree(WorldObj):
+    """
+    Door object that may be opened or closed. Locked doors require a key to open.
+
+    Attributes
+    ----------
+    is_open: bool
+        Whether the door is open
+    is_locked: bool
+        Whether the door is locked
+    """
+
+    def __new__(
+        cls, color: str = Color.green, is_open: bool = False):
+        """
+        Parameters
+        ----------
+        color : str
+            Object color
+        is_open : bool
+            Whether the tree is open
+        """
+        tree = super().__new__(cls, color=color)
+        tree.is_open = is_open
+        return tree
+
+    def __str__(self):
+        return f"{self.__class__.__name__}(color={self.color},state={self.state})"
+
+    @property
+    def is_open(self) -> bool:
+        """
+        Whether the tree is open.
+        """
+        return self.state == State.open
+
+    @is_open.setter
+    def is_open(self, value: bool):
+        """
+        Set the tree to be open or closed.
+        """
+        if value:
+            self.state = State.open # set state to open
+        else:
+            self.state = State.closed # set state to closed 
+
+    def can_overlap(self) -> bool:
+        """
+        :meta private:
+        """
+        # If is open, can overlap with agent. Otherwise, cannot (acts like a wall). 
+        return self.is_open
+
+    def toggle(self, env, agent, pos):
+        """
+        :meta private:
+        """
+        self.is_open = not self.is_open
+        env.grid.update(*pos)
+        return True
+
+    def render(self, img):
+        """
+        :meta private:
+        """
+        c = self.color.rgb()
+
+        if self.is_open:
+            # Light green circle for open state
+            fill_coords(img, point_in_circle(cx=0.5, cy=0.5, r=0.4), np.array([144, 238, 144]))
+        else:
+            # Green circle for closed state
+            fill_coords(img, point_in_circle(cx=0.5, cy=0.5, r=0.4), self.color.rgb())
+
+
+
+class HidingSpot(WorldObj):
+    """
+    Hiding Spot that may be opened or locked. Locked spot requires a key to open.
+
+    Attributes
+    ----------
+    is_open: bool
+        Whether the door is open
+    is_locked: bool
+        Whether the door is locked
+    """
+
+    def __new__(
+        cls, color: str = Color.purple, is_locked: bool = True):
+        """
+        Parameters
+        ----------
+        color : str
+            Object color
+        is_open : bool
+            Whether the door is open
+        is_locked : bool
+            Whether the door is locked
+        """
+        door = super().__new__(cls, color=color)
+        door.is_locked = is_locked
+        return door
+
+    def __str__(self):
+        return f"{self.__class__.__name__}(color={self.color},state={self.state})"
+
+    @property
+    def is_locked(self) -> bool:
+        """
+        Whether the door is locked.
+        """
+        return self.state == State.locked
+
+    @is_locked.setter
+    def is_locked(self, value: bool):
+        """
+        Set the door to be locked or unlocked.
+        """
+        if value:
+            self.state = State.locked # set state to locked
+
+    def can_overlap(self) -> bool:
+        """
+        :meta private:
+        """
+        return not self.is_locked
+
+    def toggle(self, env, agent, pos):
+        """
+        :meta private:
+        """
+        if self.is_locked:
+            # Check if the player has the right key to unlock the door
+            carried_obj = agent.state.carrying
+            if isinstance(carried_obj, Key) and carried_obj.color == self.color:
+                self.is_locked = False
+                env.grid.update(*pos)
+                return True
+            return False
+
+        env.grid.update(*pos)
+        return True
+
+    def render(self, img):
+        """
+        :meta private:
+        """
+        c = self.color.rgb()
+
+
+        # Door frame and door
+        if self.is_locked:
+            fill_coords(img, point_in_rect(0.00, 1.00, 0.00, 1.00), c)
+            fill_coords(img, point_in_rect(0.06, 0.94, 0.06, 0.94), 0.45 * c)
+
+            # Draw key slot
+            fill_coords(img, point_in_rect(0.52, 0.75, 0.50, 0.56), c)
+        else:
+            fill_coords(img, point_in_rect(0.00, 1.00, 0.00, 1.00), c)
+            fill_coords(img, point_in_rect(0.04, 0.96, 0.04, 0.96), (0, 0, 0))
+            fill_coords(img, point_in_rect(0.08, 0.92, 0.08, 0.92), c)
+            fill_coords(img, point_in_rect(0.12, 0.88, 0.12, 0.88), (0, 0, 0))
+
+           
