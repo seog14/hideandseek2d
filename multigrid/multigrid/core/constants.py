@@ -46,6 +46,7 @@ class Type(str, IndexedEnum):
     goal = 'goal'
     lava = 'lava'
     agent = 'agent'
+    tree = 'tree'
 
 
 class Color(str, IndexedEnum):
