@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 
 from pathlib import Path
 from ray.rllib.utils.framework import try_import_tf, try_import_torch
 from typing import Callable
 
-
+def init_globvar():
+    global MAX_STEPS, HIDE_STEPS, SEEK_STEPS
+    global H, GAMMA, BATCH_SIZE, LR, REPLAY_MEM_SIZE, MIN_REPLAY_MEM_SIZE
+    global UPDATE_TARGET_EVERY, EPSILON_DECAY, MIN_EPSILON, DOUBLE_NETWORK 
 
 def can_use_gpu() -> bool:
     """
@@ -72,3 +76,14 @@ def get_policy_mapping_fn(
 
     except:
         return lambda agent_id, *args, **kwargs: f'policy_{agent_id}'
+
+def generate_dir_tree(root_folder, model_name):
+    if not os.path.isdir(root_folder):
+        os.makedirs(root_folder)
+    dateTimeObj = datetime.now()
+    dir_name = dateTimeObj.strftime("%m_%d_%H_%M_%S")
+    if model_name:
+        dir_name = dir_name + "_" + model_name
+    dir_name = os.path.join(root_folder, dir_name)
+    os.makedirs(dir_name)
+    return dir_name
