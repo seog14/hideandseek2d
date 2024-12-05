@@ -11,13 +11,15 @@ import numpy as np
 from typing import Optional
 from collections import deque
 
+import matplotlib.pyplot as plt
+
 class CustomEnv(MultiGridEnv):
-    actions = ["up", "down", "left", "right", "stay"]  # Define available actions here
+    #actions = ["up", "down", "left", "right", "stay"]  # Define available actions here
 
     def __init__(self, render_mode="human", **kwargs):
         self,
         goal_pos: int
-        super().__init__(render_mode=render_mode, **kwargs)
+        super().__init__(render_mode=render_mode, success_termination_mode=all, **kwargs)
 
     def _gen_grid(self, width: int, height: int):
         """
@@ -42,8 +44,19 @@ class CustomEnv(MultiGridEnv):
         # Place agents at the top-left corner
         for agent in self.agents:
             self.place_agent(agent, top=(1, 1), size=(2, 2))
-
-
+    
+    def _reward(self) -> float:
+        return 1 - 0.9 * (self.step_count / self.max_steps)
+    
+    def step(self, actions):
+        obs, rewards, terminated, truncated, info = super().step(actions)
+        for agent in agents:
+            if terminations[agent.index] == True:
+                rewards[agent.index] = 2*grid_size+10
+            else:
+                rewards[agent.index] = -1
+        return obs, rewards, terminated, truncated, info
+        
 
 class ReplayBuffer:
     def __init__(                                                    # Why was this init and not __init__
@@ -308,14 +321,14 @@ class DQNAgent(Agent):
             minimum_replay_memory_size=dqn_params.get("minimum_replay_memory_size", 1000),
             batch_size=dqn_params.get("batch_size", 64),
             learning_rate=dqn_params.get("learning_rate", 0.001),
-            update_target_every=dqn_params.get("update_target_every", 5),
+            update_target_every=dqn_params.get("update_target_every", 50),
             priority_scale=dqn_params.get("priority_scale", 0.6),
             priority_buffer=dqn_params.get("priority_buffer", False),
             double_network=dqn_params.get("double_network", True),
         )
         self.epsilon = .99  # Exploration rate
-        self.epsilon_decay = 0.995
-        self.min_epsilon = 0.01
+        self.epsilon_decay = 0.99
+        self.min_epsilon = 0.00
 
     def select_action(self, state):
         """
@@ -344,7 +357,7 @@ replay_memory_size = 50000
 minimum_replay_memory_size = 1000
 batch_size = 64
 learning_rate = 0.001
-update_target_every = 5
+update_target_every = 500
 priority_scale = 0.6
 priority_buffer = False
 double_network = True
@@ -378,93 +391,148 @@ double_network = True
 
 #     # Close the environment
 #     env.close()
+def one_hot_encode_direction(direction, num_directions=4):
+    one_hot = np.zeros(num_directions)
+    one_hot[direction] = 1
+    return one_hot
+
 
 if __name__ == "__main__":
     import time
 
     # Define environment parameters
-    environ_actions = ["up", "down", "left", "right", "stay"]
-    view_size = 7                                               # Default setting that seems hard to change
-    grid_size = 7
-    num_agents = 1
-    state_size = view_size * view_size * 3  # Assuming 3 channels per grid cell
-    action_size = len(CustomEnv.actions)  # Use predefined actions here
+    view_size = 7  # Default setting that seems hard to change
+    grid_size = 9
+    num_agents = 5
+    state_size = view_size * view_size * 3 + 4 # Assuming 3 channels per grid cell and 4 directions
+    action_size = 3  # Use predefined actions here
+    max_eval_steps = 50  # Maximum steps for evaluation episodes
 
     # Initialize agents with DeepQ
     agents = [
-        DQNAgent(index=i, state_size=state_size, action_size=action_size,  discount=0.99)
+        DQNAgent(index=i, state_size=state_size, action_size=action_size, discount=0.99)
         for i in range(num_agents)
     ]
     
     # Create the environment
     env = CustomEnv(grid_size=grid_size, agents=agents, render_mode="human")
 
-    # Reset the environment
-    obs, infos = env.reset()
-
-    # Render the initial environment
-    env.render()
-    #time.sleep(1)  # Pause to view the initial state
-
     # Training loop
-    episodes = 100                                                               # Number of Episodes to do
-    for episode in range(episodes):
-        steps = 0
-        obs, infos = env.reset()                    
-        total_rewards = [0] * num_agents        
-        done = {agent.index: False for agent in agents}                         # Dictionary to track whether each agent has reach a terminal state
+    episodes = 500  # Number of Episodes to do
+    
+    all_total_rewards = []
+    all_episodes = []
+    evaluation_rewards = []
 
-        while not any(done.values()):
-        #while not any(done.values()):
+    for episode in range(episodes):
+        # Initialize variables for the episode
+        steps = 0
+        obs, infos = env.reset()
+        total_rewards = [0] * num_agents
+        terminations = {agent.index: False for agent in agents}
+
+        while not all(terminations.values()):  # Main training loop
             actions = {}
-            #print("Top-------------------------------------------")
             for agent in agents:
-                #print("Agent: ", agent.index, "Done: ", done[agent.index])
-                if not done[agent.index]:  # Only process agents that are not done
-                    #print("Here")
-                    # Convert observation to 1D array for the agent
-                    agent_state = obs[agent.index]["image"].flatten()
-                    actions[agent.index] = agent.select_action(agent_state)         # Agent Action selection
-                    
-                    #print("Agent: ", agent.index, " Action: ", environ_actions[actions[agent.index]])
+                if not terminations[agent.index]:
+                    agent_image = obs[agent.index]["image"].flatten()  # Flattened image observation
+                    agent_direction = obs[agent.index]["direction"]   # Direction as an integer
+                    one_hot_direction = one_hot_encode_direction(agent_direction)  # One-hot encode the direction
+
+                    # Concatenate the flattened image with the one-hot direction
+                    agent_state = np.concatenate([agent_image, one_hot_direction])
+                    actions[agent.index] = agent.select_action(agent_state)  # Action selection
                 else:
-                    #print("There")
                     actions[agent.index] = None
-                
 
             # Step the environment
-            obs, rewards, terminations, truncations, infos = env.step(actions)  # Step
+            obs, rewards, terminations, truncations, infos = env.step(actions)
             steps += 1
-            #print("Step: ", steps)
+            #print("Terminations: ", terminations)
             # Update replay memory and train each agent
             for agent in agents:
-                if not done[agent.index]:  # Skip training for terminal agents
-                    #print("Agent: ", agent.index, "Position: ", agent.pos)
-                    #print("Agent: ", agent.index, "Terminations: ", terminations[agent.index])
-                    agent_state = obs[agent.index]["image"].flatten()
-                    next_state = obs[agent.index]["image"].flatten()
-                    agent.dqn.update_replay_memory(                                 # Stores agent trainsition in replay bugger
+                if not terminations[agent.index]:
+                    #print("Image shape:", obs[agent.index]["image"].shape)  # Should be (view_size, view_size, num_channels)
+                    next_agent_image = obs[agent.index]["image"].flatten()  # Flattened image observation
+                    next_agent_direction = obs[agent.index]["direction"]   # Direction as an integer
+                    next_one_hot_direction = one_hot_encode_direction(next_agent_direction)  # One-hot encode the direction
+
+                    # Concatenate the flattened image with the one-hot direction
+                    next_state = np.concatenate([next_agent_image, next_one_hot_direction])
+                    agent.dqn.update_replay_memory(
                         (agent_state, actions[agent.index], rewards[agent.index], next_state, terminations[agent.index])
                     )
-                    #print("Training!")
-                    agent_terminal_state = torch.tensor(terminations[agent.index], dtype=torch.float32).unsqueeze(0)
-                    loss = agent.dqn.train(terminal_state=agent_terminal_state)    # Trains agent
-                    total_rewards[agent.index] += rewards[agent.index]                  # accumulates reward
-                    
-                    if env.goal_pos == agent.pos:
-                        done[agent.index] = True
-                        #print("Agent: ", agent.index, "Done: ", done[agent.index])
-                        time.sleep(1)
-                #print("Agent: ", agent.index, "Terminations: ", terminations[agent.index])
+                    loss = agent.dqn.train(terminal_state=torch.tensor(terminations[agent.index], dtype=torch.float32).unsqueeze(0))
+                    total_rewards[agent.index] += rewards[agent.index]
+                    # if env.goal_pos == agent.pos:
+                    #     done[agent.index] = True
+            for agent in agents:
+                print("Agent: ", agent.index, "Termination: ", terminations[agent.index], "Reward: ", rewards[agent.index])
             # Render environment (optional)
             env.render()
-            #time.sleep(0.001)
-            #print("Bottom---------------------------------------")
+
         # Decay exploration rate for each agent
         for agent in agents:
             agent.decay_epsilon()
+            
+            # Print training episode results
+            print(f"Episode {episode + 1}: Total Rewards = {total_rewards} Epsilon = {agent.epsilon}")
+            
+        all_total_rewards.append(total_rewards[0])
+        all_episodes.append(episode + 1)
 
-        print(f"Episode {episode + 1}: Total Rewards = {total_rewards}")
-        print(agents[0].epsilon)
+        #Evaluation run every 10 episodes
+        if (episode + 1) % 10 == 0:
+            for agent in agents:
+                agent.epsilon = 0  # Set epsilon to 0 for pure exploitation
+            
+            eval_rewards = []
+            eval_steps = 0
+            obs, infos = env.reset()
+            done = {agent.index: False for agent in agents}
+            while not all(done.values()) and eval_steps < max_eval_steps:
+                actions = {}
+                for agent in agents:
+                    if not terminations[agent.index]:
+                        agent_image = obs[agent.index]["image"].flatten()  # Flattened image observation
+                        agent_direction = obs[agent.index]["direction"]   # Direction as an integer
+                        one_hot_direction = one_hot_encode_direction(agent_direction)  # One-hot encode the direction
+
+                        # Concatenate the flattened image with the one-hot direction
+                        agent_state = np.concatenate([agent_image, one_hot_direction])
+                        actions[agent.index] = agent.select_action(agent_state)
+                    else:
+                        actions[agent.index] = None
+
+                obs, rewards, terminations, truncations, infos = env.step(actions)
+                eval_steps += 1
+                for agent in agents:
+                    eval_rewards.append(rewards[agent.index])
+                    # if env.goal_pos == agent.pos:
+                    #     done[agent.index] = True
+            
+            total_eval_reward = sum(eval_rewards)
+            evaluation_rewards.append(total_eval_reward)
+            print(f"Evaluation after Episode {episode + 1}: Total Reward = {total_eval_reward}, Steps = {eval_steps}")
+
+            for agent in agents:
+                agent.epsilon = max(agent.min_epsilon, agent.epsilon_decay ** episode)  # Restore epsilon decay
+
+        # Plot training rewards
+        plt.plot(all_episodes, all_total_rewards)
+        plt.plot(list(range(10, len(evaluation_rewards) * 10 + 1, 10)), evaluation_rewards)
+        plt.xlabel("Episode")
+        plt.ylabel("Reward")
+        plt.title("Reward vs Episode")
+        plt.legend()
+        plt.grid()
+        plt.savefig("reward_vs_episode.png")
+
     # Close the environment
-    env.close()
+    env.close() 
+
+
+
+
+
+

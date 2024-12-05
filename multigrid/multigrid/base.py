@@ -25,7 +25,6 @@ from .utils.random import RandomMixin
 
 
 ### Typing
-
 AgentID = int
 ObsType = dict[str, Any]
 
