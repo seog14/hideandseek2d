@@ -26,7 +26,6 @@ class HideAndSeekEnv(MultiGridEnv):
         max_steps: int = 100,
         num_agents: int = 2,
         percent_trees: float = .1,
-        joint_reward: bool = False,
         **kwargs):
         
         self.size = size
@@ -35,11 +34,15 @@ class HideAndSeekEnv(MultiGridEnv):
         self.grid_template = gen_env.gen_environment(self.size, percent_trees)
        
         super().__init__(
-            agents = num_agents,
+            agents=num_agents,
+            agent_view_size=self.size,
             width=size,
             height=size,
             max_steps=max_steps,
-            joint_reward=joint_reward,
+            allow_agent_overlap=True,
+            joint_reward=False,
+            success_termination_mode='any', 
+            failure_termination_mode='all',
             **kwargs,
         )
 
@@ -59,8 +62,8 @@ class HideAndSeekEnv(MultiGridEnv):
                     self.hiding_spot = HidingSpot()
                     self.grid.set(i, j, self.hiding_spot)
                 elif self.grid_template[i][j] == 4: 
-                    self.key = Key()
-                    self.grid.set(i, j, self.key)
+                    self.pressure_plate = PressurePlate()
+                    self.grid.set(i, j, self.pressure_plate)
         
         # Place agents in the center
         for agent in self.agents:
