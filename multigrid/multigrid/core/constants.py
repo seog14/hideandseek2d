@@ -47,6 +47,8 @@ class Type(str, IndexedEnum):
     lava = 'lava'
     agent = 'agent'
     tree = 'tree'
+    pressure_plate = 'pressure_plate'
+    hiding_spot = 'hiding_spot'
 
 
 class Color(str, IndexedEnum):
@@ -96,6 +98,8 @@ class State(str, IndexedEnum):
     open = 'open'
     closed = 'closed'
     locked = 'locked'
+    pressed = 'pressed'
+    unpressed = 'unpressed'
 
 
 class Direction(enum.IntEnum):

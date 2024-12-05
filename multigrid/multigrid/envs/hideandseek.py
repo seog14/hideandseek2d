@@ -30,7 +30,7 @@ class HideAndSeekEnv(MultiGridEnv):
         
         self.size = size
         self.max_steps = max_steps
-        self.seeker = (size // 2, size // 2)  # starts out in center!
+        self.seeker = np.int_(size // 2), np.int_(size // 2)  # starts out in center!
         self.grid_template = gen_env.gen_environment(self.size, percent_trees)
        
         super().__init__(
@@ -69,3 +69,12 @@ class HideAndSeekEnv(MultiGridEnv):
         for agent in self.agents:
             agent.state.pos = self.seeker
             agent.state.dir = Direction.up
+    
+    def gen_obs(self):
+        observations = super().gen_obs()
+        for i in range(self.num_agents):
+            observations[i]['seeker'] = self.seeker
+            observations[i]['curr_pos'] = self.agents[i].pos
+            observations[i]['other_pos'] = self.agents[1 - i].pos
+
+        return observations

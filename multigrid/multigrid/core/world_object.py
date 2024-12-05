@@ -156,7 +156,6 @@ class WorldObj(np.ndarray, metaclass=WorldObjMeta):
             obj = cls.__new__(cls)
             obj[...] = arr
             return obj
-
         raise ValueError(f'Unknown object type: {arr[WorldObj.TYPE]}')
 
     @functools.cached_property
@@ -625,8 +624,6 @@ class Tree(WorldObj):
     ----------
     is_open: bool
         Whether the door is open
-    is_locked: bool
-        Whether the door is locked
     """
 
     def __new__(
@@ -691,22 +688,91 @@ class Tree(WorldObj):
             # Green circle for closed state
             fill_coords(img, point_in_circle(cx=0.5, cy=0.5, r=0.4), self.color.rgb())
 
+class PressurePlate(WorldObj):
+    """
+    Pressure plate that may be pressed or not pressed. Both agents will be needed to 
+    press the plate 
 
+    Attributes
+    ----------
+    is_pressed: bool
+        Whether the plate is pressed
+    """
+
+    def __new__(
+        cls, color: str = Color.yellow, is_pressed: bool = False):
+        """
+        Parameters
+        ----------
+        color : str
+            Object color
+        is_pressed : bool
+            Whether the pressure plate is pressed
+        """
+        pressure_plate = super().__new__(cls, color=color)
+        pressure_plate.is_pressed = is_pressed
+        return pressure_plate
+
+    def __str__(self):
+        return f"{self.__class__.__name__}(color={self.color},state={self.state})"
+
+    @property
+    def is_pressed(self) -> bool:
+        """
+        Whether the pressure plate is pressed.
+        """
+        return self.state == State.pressed
+
+    @is_pressed.setter
+    def is_pressed(self, value: bool):
+        """
+        Set the pressure plate to be pressed
+        """
+        if value:
+            self.state = State.pressed # set state to open
+        else:
+            self.state = State.unpressed # set state to closed 
+
+    def can_overlap(self) -> bool:
+        """
+        :meta private:
+        """
+        # If is open, can overlap with agent. Otherwise, cannot (acts like a wall). 
+        return True
+
+    def toggle(self, env, agent, pos):
+        """
+        :meta private:
+        """
+        self.is_pressed = True
+        env.grid.update(*pos)
+        return True
+
+    def render(self, img):
+        """
+        :meta private:
+        """
+        c = self.color.rgb()
+
+        if self.is_pressed:
+            # Dark yellow circle for open state
+            fill_coords(img, point_in_rect(0, 1, 0, 1), np.array([155, 135, 12]))
+        else:
+            # Yellow circle for closed state
+            fill_coords(img, point_in_rect(0, 1, 0, 1), self.color.rgb())
 
 class HidingSpot(WorldObj):
     """
-    Hiding Spot that may be opened or locked. Locked spot requires a key to open.
+    Hiding Spot that may be opened. Agents must step on pressure plate to open
 
     Attributes
     ----------
     is_open: bool
-        Whether the door is open
-    is_locked: bool
-        Whether the door is locked
+        Whether the hiding spot is open
     """
 
     def __new__(
-        cls, color: str = Color.purple, is_locked: bool = True):
+        cls, color: str = Color.purple, is_open: bool = False):
         """
         Parameters
         ----------
@@ -714,50 +780,42 @@ class HidingSpot(WorldObj):
             Object color
         is_open : bool
             Whether the door is open
-        is_locked : bool
-            Whether the door is locked
         """
-        door = super().__new__(cls, color=color)
-        door.is_locked = is_locked
-        return door
+        hiding_spot = super().__new__(cls, color=color)
+        hiding_spot.is_open = is_open
+        return hiding_spot
 
     def __str__(self):
         return f"{self.__class__.__name__}(color={self.color},state={self.state})"
 
     @property
-    def is_locked(self) -> bool:
+    def is_open(self) -> bool:
         """
-        Whether the door is locked.
+        Whether the hiding spot is open.
         """
-        return self.state == State.locked
+        return self.state == State.open
 
-    @is_locked.setter
-    def is_locked(self, value: bool):
+    @is_open.setter
+    def is_open(self, value: bool):
         """
-        Set the door to be locked or unlocked.
+        Set the hiding spot to be open.
         """
         if value:
-            self.state = State.locked # set state to locked
+            self.state = State.open # set state to locked
+        else:
+            self.state = State.closed
 
     def can_overlap(self) -> bool:
         """
         :meta private:
         """
-        return not self.is_locked
+        return self.is_open
 
     def toggle(self, env, agent, pos):
         """
         :meta private:
         """
-        if self.is_locked:
-            # Check if the player has the right key to unlock the door
-            carried_obj = agent.state.carrying
-            if isinstance(carried_obj, Key) and carried_obj.color == self.color:
-                self.is_locked = False
-                env.grid.update(*pos)
-                return True
-            return False
-
+        self.is_pressed = True
         env.grid.update(*pos)
         return True
 
@@ -769,7 +827,7 @@ class HidingSpot(WorldObj):
 
 
         # Door frame and door
-        if self.is_locked:
+        if self.is_open:
             fill_coords(img, point_in_rect(0.00, 1.00, 0.00, 1.00), c)
             fill_coords(img, point_in_rect(0.06, 0.94, 0.06, 0.94), 0.45 * c)
 

@@ -25,3 +25,5 @@ docs/_build/
 venv
 
 multigrid/test_notebooks/*
+
+multigrid/models/*
