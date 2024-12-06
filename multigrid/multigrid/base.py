@@ -553,6 +553,9 @@ class MultiGridEnv(gym.Env, RandomMixin, ABC):
             'box': 'B',
             'goal': 'G',
             'lava': 'V',
+            'tree': 'T',
+            'pressure_plate': 'P', 
+            'hiding_spot': 'H'
         }
 
         # Map agent's direction to short string

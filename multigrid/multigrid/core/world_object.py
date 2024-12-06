@@ -156,7 +156,6 @@ class WorldObj(np.ndarray, metaclass=WorldObjMeta):
             obj = cls.__new__(cls)
             obj[...] = arr
             return obj
-
         raise ValueError(f'Unknown object type: {arr[WorldObj.TYPE]}')
 
     @functools.cached_property
@@ -614,3 +613,230 @@ class Box(WorldObj):
 
         # Horizontal slit
         fill_coords(img, point_in_rect(0.16, 0.84, 0.47, 0.53), self.color.rgb())
+
+
+# The Door class but without key
+class Tree(WorldObj):
+    """
+    Door object that may be opened or closed. Locked doors require a key to open.
+
+    Attributes
+    ----------
+    is_open: bool
+        Whether the door is open
+    """
+
+    def __new__(
+        cls, color: str = Color.green, is_open: bool = False):
+        """
+        Parameters
+        ----------
+        color : str
+            Object color
+        is_open : bool
+            Whether the tree is open
+        """
+        tree = super().__new__(cls, color=color)
+        tree.is_open = is_open
+        return tree
+
+    def __str__(self):
+        return f"{self.__class__.__name__}(color={self.color},state={self.state})"
+
+    @property
+    def is_open(self) -> bool:
+        """
+        Whether the tree is open.
+        """
+        return self.state == State.open
+
+    @is_open.setter
+    def is_open(self, value: bool):
+        """
+        Set the tree to be open or closed.
+        """
+        if value:
+            self.state = State.open # set state to open
+        else:
+            self.state = State.closed # set state to closed 
+
+    def can_overlap(self) -> bool:
+        """
+        :meta private:
+        """
+        # If is open, can overlap with agent. Otherwise, cannot (acts like a wall). 
+        return self.is_open
+
+    def toggle(self, env, agent, pos):
+        """
+        :meta private:
+        """
+        self.is_open = not self.is_open
+        env.grid.update(*pos)
+        return True
+
+    def render(self, img):
+        """
+        :meta private:
+        """
+        c = self.color.rgb()
+
+        if self.is_open:
+            # Light green circle for open state
+            fill_coords(img, point_in_circle(cx=0.5, cy=0.5, r=0.4), np.array([144, 238, 144]))
+        else:
+            # Green circle for closed state
+            fill_coords(img, point_in_circle(cx=0.5, cy=0.5, r=0.4), self.color.rgb())
+
+class PressurePlate(WorldObj):
+    """
+    Pressure plate that may be pressed or not pressed. Both agents will be needed to 
+    press the plate 
+
+    Attributes
+    ----------
+    is_pressed: bool
+        Whether the plate is pressed
+    """
+
+    def __new__(
+        cls, color: str = Color.yellow, is_pressed: bool = False):
+        """
+        Parameters
+        ----------
+        color : str
+            Object color
+        is_pressed : bool
+            Whether the pressure plate is pressed
+        """
+        pressure_plate = super().__new__(cls, color=color)
+        pressure_plate.is_pressed = is_pressed
+        return pressure_plate
+
+    def __str__(self):
+        return f"{self.__class__.__name__}(color={self.color},state={self.state})"
+
+    @property
+    def is_pressed(self) -> bool:
+        """
+        Whether the pressure plate is pressed.
+        """
+        return self.state == State.pressed
+
+    @is_pressed.setter
+    def is_pressed(self, value: bool):
+        """
+        Set the pressure plate to be pressed
+        """
+        if value:
+            self.state = State.pressed # set state to open
+        else:
+            self.state = State.unpressed # set state to closed 
+
+    def can_overlap(self) -> bool:
+        """
+        :meta private:
+        """
+        # If is open, can overlap with agent. Otherwise, cannot (acts like a wall). 
+        return True
+
+    def toggle(self, env, agent, pos):
+        """
+        :meta private:
+        """
+        self.is_pressed = True
+        env.grid.update(*pos)
+        return True
+
+    def render(self, img):
+        """
+        :meta private:
+        """
+        c = self.color.rgb()
+
+        if self.is_pressed:
+            # Dark yellow circle for open state
+            fill_coords(img, point_in_rect(0, 1, 0, 1), np.array([155, 135, 12]))
+        else:
+            # Yellow circle for closed state
+            fill_coords(img, point_in_rect(0, 1, 0, 1), self.color.rgb())
+
+class HidingSpot(WorldObj):
+    """
+    Hiding Spot that may be opened. Agents must step on pressure plate to open
+
+    Attributes
+    ----------
+    is_open: bool
+        Whether the hiding spot is open
+    """
+
+    def __new__(
+        cls, color: str = Color.purple, is_open: bool = False):
+        """
+        Parameters
+        ----------
+        color : str
+            Object color
+        is_open : bool
+            Whether the door is open
+        """
+        hiding_spot = super().__new__(cls, color=color)
+        hiding_spot.is_open = is_open
+        return hiding_spot
+
+    def __str__(self):
+        return f"{self.__class__.__name__}(color={self.color},state={self.state})"
+
+    @property
+    def is_open(self) -> bool:
+        """
+        Whether the hiding spot is open.
+        """
+        return self.state == State.open
+
+    @is_open.setter
+    def is_open(self, value: bool):
+        """
+        Set the hiding spot to be open.
+        """
+        if value:
+            self.state = State.open # set state to locked
+        else:
+            self.state = State.closed
+
+    def can_overlap(self) -> bool:
+        """
+        :meta private:
+        """
+        return self.is_open
+
+    def toggle(self, env, agent, pos):
+        """
+        :meta private:
+        """
+        self.is_pressed = True
+        env.grid.update(*pos)
+        return True
+
+    def render(self, img):
+        """
+        :meta private:
+        """
+        c = self.color.rgb()
+
+
+        # Door frame and door
+        if self.is_open:
+            fill_coords(img, point_in_rect(0.00, 1.00, 0.00, 1.00), c)
+            fill_coords(img, point_in_rect(0.06, 0.94, 0.06, 0.94), 0.45 * c)
+
+            # Draw key slot
+            fill_coords(img, point_in_rect(0.52, 0.75, 0.50, 0.56), c)
+        else:
+            fill_coords(img, point_in_rect(0.00, 1.00, 0.00, 1.00), c)
+            fill_coords(img, point_in_rect(0.04, 0.96, 0.04, 0.96), (0, 0, 0))
+            fill_coords(img, point_in_rect(0.08, 0.92, 0.08, 0.92), c)
+            fill_coords(img, point_in_rect(0.12, 0.88, 0.12, 0.88), (0, 0, 0))
+
+           
