@@ -121,6 +121,7 @@ def main(argv):
 def train_independent(env_config, model_dir): 
     state_size = grid_size * grid_size * 3 + 8 # 3 channels per grid cell, 1 directions, 1 mission, 2 seeker pos, 2 agent pos, 2 other agent pos 
     action_size = 3  
+    num_agents = 2
     # Initialize agents with DeepQ
     agents = [
         DQNAgent(index=i, state_size=state_size, action_size=action_size, 
