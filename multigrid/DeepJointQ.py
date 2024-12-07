@@ -377,7 +377,7 @@ class DeepQ_Joint_Action(nn.Module):
         
 
 class DeepJointQNAgent(Agent):
-    def __init__(self, index, state_size, action_size, num_agents, agent_indexes, **dqn_params):
+    def __init__(self, index, state_size, action_size, num_agents, agent_indexes, epsilon_decay,**dqn_params):
         """
         Initialize the DQNAgent with its own DeepQ model and replay buffer.
         """
@@ -398,7 +398,7 @@ class DeepJointQNAgent(Agent):
             seller_index = agent_indexes,
         )
         self.epsilon = .99  # Exploration rate
-        self.epsilon_decay = 0.99
+        self.epsilon_decay = epsilon_decay
         self.min_epsilon = 0.00
 
     def select_action(self, state):

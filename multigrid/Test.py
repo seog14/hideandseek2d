@@ -62,19 +62,18 @@ def one_hot_encode_direction(direction, num_directions=4):
     one_hot[direction] = 1
     return one_hot
 
-discount = 0.99
-replay_memory_size = 50000
-minimum_replay_memory_size = 1000
-batch_size = 64
-learning_rate = 0.001
-update_target_every = 500
-priority_scale = 0.6
-priority_buffer = False
-double_network = True
+# discount = 0.99
+# replay_memory_size = 50000
+# minimum_replay_memory_size = 1000
+# batch_size = 64
+# learning_rate = 0.001
+# update_target_every = 500
+# priority_scale = 0.6
+# priority_buffer = False
+# double_network = True
 
 if __name__ == "__main__":
     import time
-    print("Hi")
     # Define environment parameters
     grid_size = 5
     num_agents = 2
@@ -83,16 +82,17 @@ if __name__ == "__main__":
     max_eval_steps = 50                        # Maximum steps for evaluation episodes
 
     # Initialize agents with DeepQ
-    # agents = [
-    #     DQNAgent(index=i, state_size=state_size, action_size=action_size, discount=0.99)
-    #     for i in range(num_agents)
-    # ]
-
-    # Initialize agents with DeepJointQ
     agents = [
-        DeepJointQNAgent(index=i, state_size=state_size, action_size=action_size, num_agents=num_agents, agent_indexes = [j for j in range(num_agents) if j != i], discount=0.99)
+        DQNAgent(index=i, state_size=state_size, action_size=action_size, epsilon_decay = .99, batch_size = 64, update_target_every = 50, discount=0.99)
         for i in range(num_agents)
     ]
+
+    # Initialize agents with DeepJointQ
+    # agents = [
+    #     DeepJointQNAgent(index=i, state_size=state_size, action_size=action_size, num_agents=num_agents, agent_indexes = [j for j in range(num_agents) if j != i], 
+    #                      epsilon_decay = .995, batch_size = 64, update_target_every = 50, discount=0.99)
+    #     for i in range(num_agents)
+    # ]
     
     # Create the environment
     non_obs_env = CustomEnv(grid_size=grid_size, agents=agents, render_mode="human")

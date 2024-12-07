@@ -255,7 +255,7 @@ class DeepQ(nn.Module):
             return self.main_model(state)
         
 class DQNAgent(Agent):
-    def __init__(self, index, state_size, action_size, **dqn_params):
+    def __init__(self, index, state_size, action_size, epsilon_decay, **dqn_params):
         """
         Initialize the DQNAgent with its own DeepQ model and replay buffer.
         """
@@ -276,7 +276,7 @@ class DQNAgent(Agent):
             double_network=dqn_params.get("double_network", True),
         )
         self.epsilon = .99  # Exploration rate
-        self.epsilon_decay = 0.99
+        self.epsilon_decay = epsilon_decay
         self.min_epsilon = 0.00
 
     def select_action(self, state):

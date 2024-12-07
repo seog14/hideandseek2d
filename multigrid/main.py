@@ -119,6 +119,14 @@ def main(argv):
         train_joint(env_config, model_dir)
 
 def train_independent(env_config, model_dir): 
+    state_size = grid_size * grid_size * 3 + 8 # 3 channels per grid cell, 1 directions, 1 mission, 2 seeker pos, 2 agent pos, 2 other agent pos 
+    action_size = 3  
+    # Initialize agents with DeepQ
+    agents = [
+        DQNAgent(index=i, state_size=state_size, action_size=action_size, 
+                 epsilon_decay = u.EPSILON_DECAY, batch_size = u.BATCH_SIZE, update_target_every = u.UPDATE_TARGET_EVERY, discount=u.GAMMA, replay_memory_size = u.REPLAY_MEMORY_SIZE)
+        for i in range(num_agents)
+    ]
     pass
 
 def train_joint(env_config, model_dir):
@@ -134,7 +142,9 @@ def train_joint(env_config, model_dir):
 
         # Initialize agents with DeepJointQ
         agents = [
-            DeepJointQNAgent(index=i, state_size=state_size, action_size=action_size, num_agents=num_agents, agent_indexes = [j for j in range(num_agents) if j != i], discount=0.99)
+            DeepJointQNAgent(index=i, state_size=state_size, action_size=action_size, num_agents=num_agents, 
+                             agent_indexes = [j for j in range(num_agents) if j != i], 
+                             epsilon_decay = u.EPSILON_DECAY, batch_size = u.BATCH_SIZE, update_target_every = u.UPDATE_TARGET_EVERY, discount=u.GAMMA, replay_memory_size = u.REPLAY_MEMORY_SIZE)
             for i in range(num_agents)
         ]
         
