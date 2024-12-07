@@ -1,6 +1,8 @@
 from __future__ import annotations
 import numpy as np
 import random
+import pygame
+import pygame.freetype
 
 from itertools import repeat
 from collections import defaultdict
@@ -43,7 +45,7 @@ class HideAndSeekEnv(MultiGridEnv):
         self.hide_steps = hide_steps
         self.seek_steps = seek_steps
         self.shelter_time = shelter_time
-        self.seeker = np.int_(size // 2), np.int_(size // 2)  # starts out in center!
+        self.seeker = [np.int_(size // 2), np.int_(size // 2)]  # starts out in center!
         self.grid_template = gen_env.gen_environment(self.size, percent_trees)
        
         super().__init__(
@@ -77,19 +79,18 @@ class HideAndSeekEnv(MultiGridEnv):
                 elif self.grid_template[i][j] == 4: 
                     self.pressure_plate = PressurePlate()
                     self.grid.set(i, j, self.pressure_plate)
-        
+
+        # Reset shelter and seeker
+        self.shelter_time = 50
+        self.seeker = [np.int_(self.size // 2), np.int_(self.size // 2)]  
+
         # Place agents in the center
         for agent in self.agents:
             agent.state.pos = self.seeker
             agent.state.dir = Direction.up
+        
 
-    def reset(self): 
-        super().reset()
 
-        self.shelter_time = 50
-        self.seeker = np.int_(self.size // 2), np.int_(self.size // 2)
-
-    
     def gen_obs(self):
         observations = super().gen_obs()
         for i in range(self.num_agents):
@@ -231,30 +232,35 @@ class HideAndSeekEnv(MultiGridEnv):
             if self.adj(agent_pos, self.seeker): 
                 return 
 
+        new_pos = None
+
         # Same x value
         if agent_pos[0] == self.seeker[0]: 
             if self.seeker[1] > agent_pos[1]: 
-                self.seeker[1] -= 1
+                new_pos = (self.seeker[0], self.seeker[1] - 1)
             elif self.seeker[1] < agent_pos[1]: 
-                self.seeker[1] += 1
+                new_pos = (self.seeker[0], self.seeker[1] + 1)
 
         # Same y value
         elif agent_pos[1] == self.seeker[1]: 
             if self.seeker[0] > agent_pos[0]: 
-                self.seeker[0] -= 1
+                new_pos = (self.seeker[0] - 1, self.seeker[1])
             elif self.seeker[0] < agent_pos[0]: 
-                self.seeker[0] += 1
+                new_pos = (self.seeker[0] + 1, self.seeker[1])
         
         # Both coords different
         else: 
             # Above
             if agent_pos[1] > self.seeker[1]: 
-                self.seeker[0] += 1
+                new_pos = (self.seeker[0], self.seeker[1]+1)
             # Below
             elif agent_pos[1] < self.seeker[1]: 
-                self.seeker[0] -= 1
-        
-    
+                new_pos = (self.seeker[0], self.seeker[1]-1)
+        #TODO: don't let seeker enter hididng spot regardless
+        # Something weird is happenign here where new_pos is none, too lazy to find out why
+        if new_pos is not None:
+            self.seeker = new_pos
+
     def step(self, actions: dict[AgentID, Action]): 
         observations, rewards, terminations, truncations, infos = super().step(actions)
 
@@ -262,7 +268,7 @@ class HideAndSeekEnv(MultiGridEnv):
         if self.agents[0].state.pos == self.agents[1].state.pos: 
             if self.agents[0].state.pos == self.pressure_plate.cur_pos:
                 self.pressure_plate.is_pressed(True)
-                self.hiding_spot.is_open(True)
+                self.hiding_spot.is_open = True
 
             positions = [(0, -1), (-1, 0), (1, 0), (0, 1)]
             
@@ -270,8 +276,8 @@ class HideAndSeekEnv(MultiGridEnv):
             for i in positions: 
                 new_pos = tuple(map(sum, zip(i, self.agents[0].state.pos)))
                 obj = self.grid.get(new_pos[0], new_pos[1])
-                if obj.type == Type.tree and not obj.is_open:  
-                    obj.is_open(True)
+                if obj is not None and obj.type == Type.tree and not obj.is_open:  
+                    obj.is_open = True
 
         # Seeking Phase
         if self.step_count >= self.hide_steps:
@@ -287,17 +293,16 @@ class HideAndSeekEnv(MultiGridEnv):
                 pass
             elif agent1_dist < agent2_dist: 
                 prey = self.agents[0]
-                self.move_seeker(prey)
+                self.move_seeker(prey.state.pos)
             else: 
                 prey = self.agents[1]
-                self.move_seeker(prey)
+                self.move_seeker(prey.state.pos)
 
-
-            if self.seeker == self.agents[0].state.pos and not self.agents[0].state.terminated: 
+            if tuple(self.seeker) == self.agents[0].state.pos and not self.agents[0].state.terminated: 
                 self.agents[0].state.terminated = True # terminate this agent only
                 rewards[0] -= 1 + self.seek_steps
 
-            if self.seeker == self.agents[1].state.pos and not self.agents[1].state.terminated: 
+            if tuple(self.seeker) == self.agents[1].state.pos and not self.agents[1].state.terminated: 
                 self.agents[1].state.terminated = True # terminate this agent only
                 rewards[1] -= 1 + self.seek_steps
 
@@ -313,3 +318,65 @@ class HideAndSeekEnv(MultiGridEnv):
 
         return observations, rewards, terminations, truncations, defaultdict(dict)
    
+    def render(self):
+        """
+        Render the environment and modify one cell's color in the subclass.
+        """
+        """
+        Render the environment.
+        """
+        img = self.get_frame(self.highlight, self.tile_size)
+
+        if self.render_mode == 'human':
+            img = np.transpose(img, axes=(1, 0, 2))
+            cell_y, cell_x = self.seeker  # Coordinates of the cell
+            cell_size = self.tile_size
+            start_x = cell_x * cell_size
+            end_x = start_x + cell_size
+            start_y = cell_y * cell_size
+            end_y = start_y + cell_size
+            img[start_y:end_y, start_x:end_x] = [255, 0, 0]  # Make the cell red
+
+            screen_size = (
+                self.screen_size * min(img.shape[0] / img.shape[1], 1.0),
+                self.screen_size * min(img.shape[1] / img.shape[0], 1.0),
+            )
+            if self.render_size is None:
+                self.render_size = img.shape[:2]
+            if self.window is None:
+                pygame.init()
+                pygame.display.init()
+                pygame.display.set_caption(f'multigrid - {self.__class__.__name__}')
+                self.window = pygame.display.set_mode(screen_size)
+            if self.clock is None:
+                self.clock = pygame.time.Clock()
+            surf = pygame.surfarray.make_surface(img)
+
+            # Create background with mission description
+            offset = surf.get_size()[0] * 0.1
+            # offset = 32 if self.agent_pov else 64
+            bg = pygame.Surface(
+                (int(surf.get_size()[0] + offset), int(surf.get_size()[1] + offset))
+            )
+            bg.convert()
+            bg.fill((255, 255, 255))
+            bg.blit(surf, (offset / 2, 0))
+
+            bg = pygame.transform.smoothscale(bg, screen_size)
+
+            font_size = 22
+            text = str(self.mission)
+            font = pygame.freetype.SysFont(pygame.font.get_default_font(), font_size)
+            text_rect = font.get_rect(text, size=font_size)
+            text_rect.center = bg.get_rect().center
+            text_rect.y = bg.get_height() - font_size * 1.5
+            font.render_to(bg, text_rect, text, size=font_size)
+
+            self.window.blit(bg, (0, 0))
+            pygame.event.pump()
+            self.clock.tick(self.metadata['render_fps'])
+            pygame.display.flip()
+
+        elif self.render_mode == 'rgb_array':
+            return img
+    
