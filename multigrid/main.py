@@ -12,6 +12,8 @@ from absl import flags
 from absl import app
 import wandb
 
+from DeepQ import DQNAgent
+
 FLAGS = flags.FLAGS
 
 # environment options 
@@ -20,7 +22,7 @@ flags.DEFINE_integer("max_steps", 100, "timesteps for one episode")
 flags.DEFINE_integer("hide_steps", 75, "timesteps to hide")
 flags.DEFINE_integer("seek_steps", 25, "timesteps to seek")
 
-# training options 
+# tining options 
 flags.DEFINE_bool("train_independent", True, "train independent deep q")
 flags.DEFINE_bool("train_joint", False, "train joint action deep q")
 flags.DEFINE_bool("test", False, "test loaded model")
