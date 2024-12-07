@@ -12,6 +12,12 @@ from absl import flags
 from absl import app
 import wandb
 
+from DeepQ import DQNAgent
+from DeepJointQ import DeepJointQNAgent
+
+import numpy as np
+import torch
+
 FLAGS = flags.FLAGS
 
 # environment options 
@@ -20,7 +26,7 @@ flags.DEFINE_integer("max_steps", 100, "timesteps for one episode")
 flags.DEFINE_integer("hide_steps", 75, "timesteps to hide")
 flags.DEFINE_integer("seek_steps", 25, "timesteps to seek")
 
-# training options 
+# tining options 
 flags.DEFINE_bool("train_independent", True, "train independent deep q")
 flags.DEFINE_bool("train_joint", False, "train joint action deep q")
 flags.DEFINE_bool("test", False, "test loaded model")
@@ -113,10 +119,111 @@ def main(argv):
         train_joint(env_config, model_dir)
 
 def train_independent(env_config, model_dir): 
+    state_size = grid_size * grid_size * 3 + 8 # 3 channels per grid cell, 1 directions, 1 mission, 2 seeker pos, 2 agent pos, 2 other agent pos 
+    action_size = 3  
+    num_agents = 2
+    # Initialize agents with DeepQ
+    agents = [
+        DQNAgent(index=i, state_size=state_size, action_size=action_size, 
+                 epsilon_decay = u.EPSILON_DECAY, batch_size = u.BATCH_SIZE, update_target_every = u.UPDATE_TARGET_EVERY, discount=u.GAMMA, replay_memory_size = u.REPLAY_MEMORY_SIZE)
+        for i in range(num_agents)
+    ]
     pass
 
 def train_joint(env_config, model_dir):
-    pass
+    if __name__ == "__main__":
+        # Define environment parameters
+        grid_size = 7                                                                           # PREDEFINED ENV SIZE
+        num_agents = 2
+        state_size = grid_size * grid_size * 3 + 8 # 3 channels per grid cell, 1 directions, 1 mission, 2 seeker pos, 2 agent pos, 2 other agent pos 
+        action_size = 3                                                                         # PREDEFINED ACTION SIZE
+        # Training loop
+        episodes = 500                                       # Number of Episodes to do
+
+
+        # Initialize agents with DeepJointQ
+        agents = [
+            DeepJointQNAgent(index=i, state_size=state_size, action_size=action_size, num_agents=num_agents, 
+                             agent_indexes = [j for j in range(num_agents) if j != i], 
+                             epsilon_decay = u.EPSILON_DECAY, batch_size = u.BATCH_SIZE, update_target_every = u.UPDATE_TARGET_EVERY, discount=u.GAMMA, replay_memory_size = u.REPLAY_MEMORY_SIZE)
+            for i in range(num_agents)
+        ]
+        
+        # Create the environment
+        non_obs_env = HideAndSeekEnv(grid_size=grid_size, agents=agents, render_mode=env_config['render_mode'])
+        full_obs_env = FullyObsWrapper(non_obs_env)
+        
+        all_total_rewards = [[] for _ in range(num_agents)]  # Separate list for each agent
+        all_episodes = []
+
+        for episode in range(episodes):
+            # Initialize variables for the episode
+            steps = 0
+            obs, infos = full_obs_env.reset()
+            total_rewards = [0] * num_agents
+            terminations = {agent.index: False for agent in agents}
+
+            while not full_obs_env.env.is_done():            # Main training loop                             #HEY LOOK HERE#
+                actions = {}
+                for agent in agents:
+                    if not terminations[agent.index]:
+                        agent_image = obs[agent.index]["image"].flatten()  # Flattened image observation
+
+                        agent_direction = np.array([obs[agent.index]["direction"]])   # Direction as an integer
+
+                        agent_mission = np.array([obs[agent.index]["mission"]])
+
+                        seeker_pos = obs[agent.index]["seeker"].flatten()
+
+                        agent_pos = obs[agent.index]["curr_pos"].flatten()
+                        other_agent_pos = obs[agent.index]["other_pos"].flatten()
+
+                        # Concatenate the flattened image with the one-hot direction
+                        agent_state = np.concatenate([agent_image, agent_direction, agent_mission, seeker_pos, agent_pos, other_agent_pos])
+                        actions[agent.index] = agent.select_action(agent_state)  # Action selection
+                    else:
+                        actions[agent.index] = None
+
+                # Step the environment
+                obs, rewards, terminations, truncations, infos = full_obs_env.step(actions)
+                steps += 1
+                # Update replay memory and train each agent
+                for agent in agents:
+                    if not terminations[agent.index]:
+                        next_agent_image = obs[agent.index]["image"].flatten()  # Flattened image observation
+                        next_agent_direction = np.array([obs[agent.index]["direction"]])   # Direction as an integer
+
+                        next_agent_mission = np.array([obs[agent.index]['mission']])
+
+                        next_seeker_pos = obs[agent.index]["seeker"]
+
+                        next_agent_pos = obs[agent.index]["curr_pos"]
+                        next_other_agent_pos = obs[agent.index]["other_pos"]
+
+                        # Concatenate the flattened image with the one-hot direction
+                        next_state = np.concatenate([next_agent_image, next_agent_direction, next_agent_mission, next_seeker_pos, next_agent_pos, next_other_agent_pos])
+                        agent.dqn.update_replay_memory(
+                            (agent_state, actions[agent.index], rewards[agent.index], next_state, terminations[agent.index])
+                        )
+                        loss = agent.dqn.train(terminal_state=torch.tensor(terminations[agent.index], dtype=torch.float32).unsqueeze(0))
+                        total_rewards[agent.index] += rewards[agent.index]
+                # Render environment (optional)
+                full_obs_env.render()
+
+            # Decay exploration rate for each agent
+            for agent in agents:
+                agent.decay_epsilon()
+                
+            # Print training episode results
+            print(f"Episode {episode + 1}: Total Rewards = {total_rewards} Epsilon = {agent.epsilon}")
+                
+            for i, reward in enumerate(total_rewards):
+                all_total_rewards[i].append(reward)
+
+            all_episodes.append(episode + 1)
+
+        # Close the environment
+        full_obs_env.close() 
 
 def test(env_config): 
     pass
