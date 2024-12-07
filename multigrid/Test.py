@@ -74,9 +74,9 @@ double_network = True
 
 if __name__ == "__main__":
     import time
-
+    print("Hi")
     # Define environment parameters
-    grid_size = 10
+    grid_size = 5
     num_agents = 2
     state_size = grid_size * grid_size * 3 + 2 # 3 channels per grid cell, 1 direction and 1 mission
     action_size = 3                                                                         # Using predefined actions here

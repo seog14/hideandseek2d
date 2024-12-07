@@ -139,7 +139,7 @@ def train_joint(env_config, model_dir):
         ]
         
         # Create the environment
-        non_obs_env = HideAndSeekEnv(grid_size=grid_size, agents=agents, render_mode="human")
+        non_obs_env = HideAndSeekEnv(grid_size=grid_size, agents=agents, render_mode=env_config['render_mode'])
         full_obs_env = FullyObsWrapper(non_obs_env)
         
         all_total_rewards = [[] for _ in range(num_agents)]  # Separate list for each agent
