@@ -2,6 +2,8 @@ from multigrid.base import MultiGridEnv
 from multigrid.core.grid import Grid
 from multigrid.core.world_object import Wall, Goal
 
+from multigrid.wrappers import FullyObsWrapper
+
 import torch # type: ignore
 import numpy as np
 
@@ -74,12 +76,11 @@ if __name__ == "__main__":
     import time
 
     # Define environment parameters
-    view_size = 7  # Default setting that seems hard to change
-    grid_size = 5
+    grid_size = 10
     num_agents = 2
-    state_size = view_size * view_size * 3 + 4 # Assuming 3 channels per grid cell and 4 directions
-    action_size = 3  # Use predefined actions here
-    max_eval_steps = 50  # Maximum steps for evaluation episodes
+    state_size = grid_size * grid_size * 3 + 2 # 3 channels per grid cell, 1 direction and 1 mission
+    action_size = 3                                                                         # Using predefined actions here
+    max_eval_steps = 50                        # Maximum steps for evaluation episodes
 
     # Initialize agents with DeepQ
     # agents = [
@@ -94,10 +95,15 @@ if __name__ == "__main__":
     ]
     
     # Create the environment
-    env = CustomEnv(grid_size=grid_size, agents=agents, render_mode="human")
+    non_obs_env = CustomEnv(grid_size=grid_size, agents=agents, render_mode="human")
+    full_obs_env = FullyObsWrapper(non_obs_env)
+
+    #print("Grid size: ", full_obs_env.env.height, full_obs_env.env.width)
+    #print("Encoded grid shape: ", full_obs_env.env.grid.encode().shape)
+
 
     # Training loop
-    episodes = 500  # Number of Episodes to do
+    episodes = 500                                       # Number of Episodes to do
     
     all_total_rewards = [[] for _ in range(num_agents)]  # Separate list for each agent
     all_episodes = []
@@ -106,51 +112,52 @@ if __name__ == "__main__":
     for episode in range(episodes):
         # Initialize variables for the episode
         steps = 0
-        obs, infos = env.reset()
+        obs, infos = full_obs_env.reset()
         total_rewards = [0] * num_agents
         terminations = {agent.index: False for agent in agents}
 
-        while not all(terminations.values()):  # Main training loop
+        while not all(terminations.values()):            # Main training loop
             actions = {}
             for agent in agents:
                 if not terminations[agent.index]:
                     agent_image = obs[agent.index]["image"].flatten()  # Flattened image observation
-                    agent_direction = obs[agent.index]["direction"]   # Direction as an integer
-                    one_hot_direction = one_hot_encode_direction(agent_direction)  # One-hot encode the direction
 
+                    agent_direction = np.array([obs[agent.index]["direction"]])   # Direction as an integer
+
+                    agent_mission = np.array([obs[agent.index]["mission"]])
                     # Concatenate the flattened image with the one-hot direction
-                    agent_state = np.concatenate([agent_image, one_hot_direction])
+                    agent_state = np.concatenate([agent_image, agent_direction, agent_mission])
                     actions[agent.index] = agent.select_action(agent_state)  # Action selection
                 else:
                     actions[agent.index] = None
 
             # Step the environment
-            obs, rewards, terminations, truncations, infos = env.step(actions)
+            obs, rewards, terminations, truncations, infos = full_obs_env.step(actions)
             steps += 1
             # Update replay memory and train each agent
             for agent in agents:
                 if not terminations[agent.index]:
-                    #print("Image shape:", obs[agent.index]["image"].shape)  # Should be (view_size, view_size, num_channels)
                     next_agent_image = obs[agent.index]["image"].flatten()  # Flattened image observation
-                    next_agent_direction = obs[agent.index]["direction"]   # Direction as an integer
-                    next_one_hot_direction = one_hot_encode_direction(next_agent_direction)  # One-hot encode the direction
+                    next_agent_direction = np.array([obs[agent.index]["direction"]])   # Direction as an integer
+
+                    next_agent_mission = np.array([obs[agent.index]["mission"]])
 
                     # Concatenate the flattened image with the one-hot direction
-                    next_state = np.concatenate([next_agent_image, next_one_hot_direction])
+                    next_state = np.concatenate([next_agent_image, next_agent_direction, next_agent_mission])
                     agent.dqn.update_replay_memory(
                         (agent_state, actions[agent.index], rewards[agent.index], next_state, terminations[agent.index])
                     )
                     loss = agent.dqn.train(terminal_state=torch.tensor(terminations[agent.index], dtype=torch.float32).unsqueeze(0))
                     total_rewards[agent.index] += rewards[agent.index]
             # Render environment (optional)
-            env.render()
+            full_obs_env.render()
 
         # Decay exploration rate for each agent
         for agent in agents:
             agent.decay_epsilon()
             
-            # Print training episode results
-            print(f"Episode {episode + 1}: Total Rewards = {total_rewards} Epsilon = {agent.epsilon}")
+        # Print training episode results
+        print(f"Episode {episode + 1}: Total Rewards = {total_rewards} Epsilon = {agent.epsilon}")
             
         for i, reward in enumerate(total_rewards):
             all_total_rewards[i].append(reward)
@@ -207,7 +214,7 @@ if __name__ == "__main__":
         plt.savefig("reward_vs_episode_agents.png")
 
     # Close the environment
-    env.close() 
+    full_obs_env.close() 
 
 
 

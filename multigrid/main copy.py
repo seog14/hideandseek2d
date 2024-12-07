@@ -124,13 +124,17 @@ def train_independent(env_config, model_dir):
 def train_joint(env_config, model_dir):
     if __name__ == "__main__":
         # Define environment parameters
-        grid_size = 7                                                                           # PREDEFINED ENV SIZE
+        grid_size = 7
         num_agents = 2
-        state_size = grid_size * grid_size * 3 + 8 # 3 channels per grid cell, 1 directions, 1 mission, 2 seeker pos, 2 agent pos, 2 other agent pos 
-        action_size = 3                                                                         # PREDEFINED ACTION SIZE
-        # Training loop
-        episodes = 500                                       # Number of Episodes to do
+        state_size = grid_size * grid_size * 3 + 4 # 3 channels per grid cell and 4 directions
+        action_size = 3                                                                         # Using predefined actions here
+        max_eval_steps = 50                        # Maximum steps for evaluation episodes
 
+        # Initialize agents with DeepQ
+        # agents = [
+        #     DQNAgent(index=i, state_size=state_size, action_size=action_size, discount=0.99)
+        #     for i in range(num_agents)
+        # ]
 
         # Initialize agents with DeepJointQ
         agents = [
@@ -141,9 +145,13 @@ def train_joint(env_config, model_dir):
         # Create the environment
         non_obs_env = HideAndSeekEnv(grid_size=grid_size, agents=agents, render_mode="human")
         full_obs_env = FullyObsWrapper(non_obs_env)
+
+        # Training loop
+        episodes = 500                                       # Number of Episodes to do
         
         all_total_rewards = [[] for _ in range(num_agents)]  # Separate list for each agent
         all_episodes = []
+        evaluation_rewards = [[] for _ in range(num_agents)]
 
         for episode in range(episodes):
             # Initialize variables for the episode
@@ -152,7 +160,7 @@ def train_joint(env_config, model_dir):
             total_rewards = [0] * num_agents
             terminations = {agent.index: False for agent in agents}
 
-            while not full_obs_env.env.is_done():            # Main training loop                             #HEY LOOK HERE#
+            while not all(terminations.values()):            # Main training loop
                 actions = {}
                 for agent in agents:
                     if not terminations[agent.index]:
@@ -160,15 +168,10 @@ def train_joint(env_config, model_dir):
 
                         agent_direction = np.array([obs[agent.index]["direction"]])   # Direction as an integer
 
-                        agent_mission = np.array([obs[agent.index]["mission"]])
-
-                        seeker_pos = obs[agent.index]["seeker"].flatten()
-
-                        agent_pos = obs[agent.index]["curr_pos"].flatten()
-                        other_agent_pos = obs[agent.index]["other_pos"].flatten()
+                        agent_mission = np.array([obs[agent.index]['mission']])
 
                         # Concatenate the flattened image with the one-hot direction
-                        agent_state = np.concatenate([agent_image, agent_direction, agent_mission, seeker_pos, agent_pos, other_agent_pos])
+                        agent_state = np.concatenate([agent_image, agent_direction, agent_mission])
                         actions[agent.index] = agent.select_action(agent_state)  # Action selection
                     else:
                         actions[agent.index] = None
@@ -182,15 +185,10 @@ def train_joint(env_config, model_dir):
                         next_agent_image = obs[agent.index]["image"].flatten()  # Flattened image observation
                         next_agent_direction = np.array([obs[agent.index]["direction"]])   # Direction as an integer
 
-                        next_agent_mission = np.array([obs[agent.index]['mission']])
-
-                        next_seeker_pos = obs[agent.index]["seeker"]
-
-                        next_agent_pos = obs[agent.index]["curr_pos"]
-                        next_other_agent_pos = obs[agent.index]["other_pos"]
+                        agent_mission = np.array([obs[agent.index]['mission']])
 
                         # Concatenate the flattened image with the one-hot direction
-                        next_state = np.concatenate([next_agent_image, next_agent_direction, next_agent_mission, next_seeker_pos, next_agent_pos, next_other_agent_pos])
+                        next_state = np.concatenate([next_agent_image, next_agent_direction, agent_mission])
                         agent.dqn.update_replay_memory(
                             (agent_state, actions[agent.index], rewards[agent.index], next_state, terminations[agent.index])
                         )
@@ -203,8 +201,8 @@ def train_joint(env_config, model_dir):
             for agent in agents:
                 agent.decay_epsilon()
                 
-            # Print training episode results
-            print(f"Episode {episode + 1}: Total Rewards = {total_rewards} Epsilon = {agent.epsilon}")
+                # Print training episode results
+                print(f"Episode {episode + 1}: Total Rewards = {total_rewards} Epsilon = {agent.epsilon}")
                 
             for i, reward in enumerate(total_rewards):
                 all_total_rewards[i].append(reward)
