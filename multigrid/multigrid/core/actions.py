@@ -13,3 +13,4 @@ class Action(enum.IntEnum):
     drop = enum.auto() #: Drop an object
     toggle = enum.auto() #: Toggle / activate an object
     done = enum.auto() #: Done completing task
+    none = enum.auto() #: No action

@@ -78,7 +78,7 @@ def gen_environment(size: int = 15, percent_trees: int = .1):
     for i in range(size): 
         for j in range(size): 
             if (i, j) in op: 
-                if(random.random() <= percent_trees): 
+                if(random.random() <= percent_trees and (i, j) != (center, center)): 
                     grid_template[i][j] = 2
 
     for i in range(size): 
