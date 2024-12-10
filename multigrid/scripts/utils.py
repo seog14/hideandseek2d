@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
+import numpy as np 
 from pathlib import Path
 from ray.rllib.utils.framework import try_import_tf, try_import_torch
 from typing import Callable
@@ -11,6 +12,20 @@ def init_globvar():
     global MAX_STEPS, HIDE_STEPS, SEEK_STEPS
     global H, GAMMA, BATCH_SIZE, LR, REPLAY_MEM_SIZE, MIN_REPLAY_MEM_SIZE
     global UPDATE_TARGET_EVERY, EPSILON_DECAY, MIN_EPSILON, DOUBLE_NETWORK 
+
+def preprocess_agent_observations(obs):
+    preprocessed_obs = {}
+    for agent in obs: 
+        grid_state = obs[agent]['image']
+        extra_state_info = [obs[0]['direction'], 
+                            obs[0]['seeker'], 
+                            obs[0]['curr_pos'], 
+                            obs[0]['other_pos']]
+        extra_state_info = [np.array(x, ndmin=1) for x in extra_state_info]
+        extra_state_info = np.concatenate(extra_state_info)
+        preprocessed_obs[agent] = (grid_state, extra_state_info)
+    
+    return preprocessed_obs
 
 def can_use_gpu() -> bool:
     """

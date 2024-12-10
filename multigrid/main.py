@@ -7,12 +7,13 @@ from scripts.utils import generate_dir_tree
 import scripts.utils as u
 
 import os
+import time
 
 from absl import flags
 from absl import app
 import wandb
 
-from DeepQ import DQNAgent
+from DeepQ import DQNAgent, DQNAgentConv
 from DeepJointQ import DeepJointQNAgent
 
 import numpy as np
@@ -25,6 +26,8 @@ flags.DEFINE_string("render_mode", None, "None for nothing, human for render")
 flags.DEFINE_integer("max_steps", 100, "timesteps for one episode")
 flags.DEFINE_integer("hide_steps", 75, "timesteps to hide")
 flags.DEFINE_integer("seek_steps", 25, "timesteps to seek")
+flags.DEFINE_integer("num_hiders", 2, "number of hiders")
+flags.DEFINE_integer("grid_size", 15, "grid width")
 
 # tining options 
 flags.DEFINE_bool("train_independent", True, "train independent deep q")
@@ -119,16 +122,157 @@ def main(argv):
         train_joint(env_config, model_dir)
 
 def train_independent(env_config, model_dir): 
-    state_size = grid_size * grid_size * 3 + 8 # 3 channels per grid cell, 1 directions, 1 mission, 2 seeker pos, 2 agent pos, 2 other agent pos 
-    action_size = 3  
-    num_agents = 2
+    # set up device 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # set up env 
+    env = HideAndSeekEnv(**env_config)
+    full_obs_env = FullyObsWrapper(env)
+
+    obs, _ = full_obs_env.reset()
+
+    grid_state, extra_state = u.preprocess_agent_observations(obs)[0]
+    
+    extra_state_size = len(extra_state)
+    
+    # set up actions 
+    valid_actions = [Action.left, Action.right, Action.forward, Action.none]
+    num_actions = len(valid_actions)
+
     # Initialize agents with DeepQ
-    agents = [
-        DQNAgent(index=i, state_size=state_size, action_size=action_size, 
-                 epsilon_decay = u.EPSILON_DECAY, batch_size = u.BATCH_SIZE, update_target_every = u.UPDATE_TARGET_EVERY, discount=u.GAMMA, replay_memory_size = u.REPLAY_MEMORY_SIZE)
-        for i in range(num_agents)
-    ]
-    pass
+    agent_models = {}
+    for i in range(FLAGS.num_hiders):
+        agent_models[i] = DQNAgentConv(index=i, 
+                                       grid_size=FLAGS.grid_size, 
+                                       extra_state_size=extra_state_size, 
+                                       num_hidden_layers=FLAGS.h, 
+                                       action_size=num_actions,
+                                       minimum_epsilon=u.MIN_EPSILON ,  
+                                       epsilon_decay = u.EPSILON_DECAY,
+                                       batch_size = u.BATCH_SIZE, 
+                                       update_target_every = u.UPDATE_TARGET_EVERY, 
+                                       discount=u.GAMMA, 
+                                       replay_memory_size = u.REPLAY_MEM_SIZE)
+        agent_models[i].dqn.to(device)
+
+    if FLAGS.wb_log:
+        wandb.init(name=("independent_num_hidden_{}_lr_{}_epsilon_decay_{}_batch_{}" +
+                        "_discount_{}_replay_mem_{}_update_target_{}_episode_len_{}").format(
+                        FLAGS.h, 
+                        FLAGS.learning_rate, 
+                        FLAGS.epsilon_decay, 
+                        FLAGS.batch_size, 
+                        FLAGS.gamma, 
+                        FLAGS.replay_memory_size, 
+                        FLAGS.update_target_every, 
+                        FLAGS.max_steps
+                        ), project='hideandseek2d')
+        wandb.define_metric("episodes")
+        wandb.define_metric("*", step_metric="episodes")
+        for agent_id, deep_q_model in agent_models.items():
+            wandb.watch(deep_q_model.dqn, idx=agent_id+1)
+
+    epsilon = 1 
+    episode_count = 0
+    agent_episode_rewards = []
+    episode_losses = []
+    start_time = time.time()
+
+    # main loop for model inference and update
+    while episode_count < FLAGS.total_eps:
+        # restart episode 
+        agent_episode_reward = np.zeros(FLAGS.num_hiders)
+        episode_loss = np.zeros(FLAGS.num_hiders)
+        
+        #reset environment and get initial state for seller
+        obs, _ = full_obs_env.reset()
+
+        current_states_dict = u.preprocess_agent_observations(obs)
+
+        actions = {}
+        first_terminated = {i: False for i in range(FLAGS.num_hiders)}
+
+        #Start iterating until episode ends 
+        done = False 
+        while not done: 
+            # set up actions dictionary
+            for agent in current_states_dict: 
+                action = agent_models[agent].select_action(current_states_dict[0], current_states_dict[1])
+                actions[agent] = action
+
+            new_state, rewards_dict, terminated_dict, _, _ = full_obs_env.step(actions)
+            
+            new_states_dict = u.preprocess_agent_observations(new_state)
+
+            # Update seller and platform episode rewards and replay memory for training
+            for agent in rewards_dict: 
+                agent_episode_reward[agent] += rewards_dict[agent]
+
+            done = all(terminated_dict.values())
+
+            # Update replay memory and train main network
+            for agent in agent_models:
+                if not terminated_dict[agent] or not first_terminated[agent]:
+
+                    if terminated_dict[agent]:
+                        first_terminated[agent] = True
+
+                    current_grid_state, current_extra_state = current_states_dict[agent]
+                    new_grid_state, new_extra_state = new_states_dict[agent]
+                    agent_models[agent].dqn.update_replay_memory(((current_grid_state, current_extra_state),
+                                                                  actions[agent],
+                                                                  rewards_dict[agent], 
+                                                                  (new_grid_state, new_extra_state), terminated_dict[agent]))
+                    
+                loss = agent_models[agent].dqn.train(terminated_dict[agent])
+                if loss is not None: 
+                    episode_loss[agent] += loss    
+
+            current_grid_state, current_extra_state = new_grid_state, new_extra_state
+        
+        # Add episode rewards to a list and log stats 
+        agent_episode_rewards.append(agent_episode_reward)
+        episode_losses.append(episode_loss)
+        if FLAGS.wb_log and episode_count % FLAGS.wb_log_interval == 0 and episode_count >= FLAGS.wb_log_interval: 
+            log_dict = {
+                "Episode average time": (time.time()-start_time)/FLAGS.wb_log_interval,
+                "episodes": episode_count
+            }
+
+            # add seller rewards and seller model loss to log_dict
+            last_interval_agent_episode_rewards =  agent_episode_rewards[-FLAGS.wb_log_interval:]
+            last_interval_episode_losses = episode_losses[-FLAGS.wb_log_interval:]
+            for agent_index in range(FLAGS.num_hiders):
+                agent_rewards = [array[agent_index] for array in last_interval_agent_episode_rewards]
+                agent_model_losses = [array[agent_index] for array in last_interval_episode_losses]
+                log_dict[f"Episode average agent {agent_index+1} reward"] = np.mean(agent_rewards)
+                log_dict[f"Episode average loss for agent {agent_index+1}"] = (np.mean(agent_model_losses) if 
+                    episode_count * FLAGS.max_steps > FLAGS.minimum_replay_memory_size else None)
+            wandb.log(log_dict)
+            start_time = time.time()
+
+        # save models
+        num_save = 2000 // FLAGS.wb_log_interval + 1 
+        if episode_count % (num_save * FLAGS.wb_log_interval) == 0 and episode_count > 10 * FLAGS.wb_log_interval:
+            for agent in agent_models:
+                checkpoint = {'state_dict': agent_models[agent].dqn.main_model.state_dict(), 
+                              'optimizer': agent_models[agent].dqn.main_optimizer.state_dict()}
+                checkpoint_folder_name = 'checkpoint_agent_ep_{}_{}'.format(episode_count, 
+                                                                            FLAGS.batch_size, 
+                                                                            FLAGS.learning_rate)
+                checkpoint_folder = os.path.join(model_dir, checkpoint_folder_name)
+                if not os.path.isdir(checkpoint_folder):
+                    os.makedirs(checkpoint_folder)
+                torch.save(checkpoint, os.path.join(checkpoint_folder, f'agent_{int(agent)+1}.pth'))
+
+        # Decay epsilon 
+        if epsilon > FLAGS.minimum_epsilon:
+            epsilon *= FLAGS.epsilon_decay
+            epsilon = max(FLAGS.minimum_epsilon, epsilon)
+
+        episode_count+=1
+        print(episode_count)
+
 
 def train_joint(env_config, model_dir):
     if __name__ == "__main__":
