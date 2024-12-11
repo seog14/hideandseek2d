@@ -2,11 +2,14 @@ import torch # type: ignore
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
+from tensordict import TensorDict
+from torchrl.data import LazyTensorStorage, PrioritizedReplayBuffer
+
 from typing import Optional
 from collections import deque
+import random 
 
 from multigrid.core.agent import Agent
-
 
 class ReplayBuffer:
     def __init__(                                                    # Why was this init and not __init__
@@ -67,6 +70,258 @@ class ReplayBuffer:
         if self.priority_buffer:
             self.replay_buffer.update_priority(indices, errors)
 
+class DeepQConv(nn.Module):
+    def __init__(
+        self,
+        grid_size,
+        extra_state_size, 
+        num_hidden_layers,
+        num_actions,
+        discount: Optional[float] = None,
+        replay_memory_size: Optional[int] = None,
+        minimum_replay_memory_size: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        learning_rate: Optional[float] = None,
+        update_target_every: Optional[int] = None,
+        priority_scale: Optional[float] = None,
+        priority_buffer=False,
+        double_network=False,
+    ):
+
+        super(DeepQConv, self).__init__()
+        self.grid_size = grid_size
+        self.num_hidden_layers = num_hidden_layers
+        self.extra_state_size = extra_state_size
+        self.discount = discount
+        self.replay_memory_size = replay_memory_size
+        self.minimum_replay_memory_size = minimum_replay_memory_size
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+        self.update_target_every = update_target_every
+        self.double_network = double_network
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.main_model_conv_branch = nn.Sequential(                                # Network Architecture
+            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),
+        ).to(self.device)
+
+        self.main_model_fc_branch = nn.Sequential(
+            nn.LayerNorm(self.grid_size * self.grid_size * 32 + self.extra_state_size),
+            nn.Linear(self.grid_size * self.grid_size * 32 + self.extra_state_size, self.num_hidden_layers),
+            nn.ReLU(),
+            nn.Linear(self.num_hidden_layers, self.num_hidden_layers),
+            nn.ReLU(),
+            nn.Linear(self.num_hidden_layers, num_actions),
+        ).to(self.device)                                               # Network Architecture
+
+        self.target_model_conv_branch = nn.Sequential(                                # Network Architecture
+            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),
+        ).to(self.device)
+
+        self.target_model_fc_branch = nn.Sequential(
+            nn.LayerNorm(self.grid_size * self.grid_size * 32 + self.extra_state_size),
+            nn.Linear(self.grid_size * self.grid_size * 32 + self.extra_state_size, self.num_hidden_layers),
+            nn.ReLU(),
+            nn.Linear(self.num_hidden_layers, self.num_hidden_layers),
+            nn.ReLU(),
+            nn.Linear(self.num_hidden_layers, num_actions),
+        ).to(self.device) 
+
+        # Combine branches into models
+        self.main_model = nn.Sequential(
+            self.main_model_conv_branch,
+            self.main_model_fc_branch
+        ).to(self.device)
+
+        self.target_model = nn.Sequential(
+            self.target_model_conv_branch,
+            self.target_model_fc_branch
+        ).to(self.device)
+
+        # load main model parameters into target model
+        self.target_model.load_state_dict(self.main_model.state_dict())
+
+        # Initialize optimizer
+        if self.learning_rate is not None:
+            self.main_optimizer = optim.Adam(
+                self.main_model.parameters(), lr=self.learning_rate
+            )
+
+        # replay memory
+        if self.replay_memory_size is not None:
+            self.replay_memory = ReplayBuffer(                          # Set replay memory as Replay Buffer
+                buffer_size=self.replay_memory_size,
+                state_size=grid_size,
+                batch_size=self.batch_size,
+                priority_buffer=priority_buffer,
+                priority_scale=priority_scale,
+            )
+
+        # used to count when to update target model with main model weights
+        self.target_update_counter = 0
+
+    def forward_main(self, grid_input_tensor, extra_input_tensor):
+        # Process grid_input through the convolutional branch
+        grid_input_tensor = grid_input_tensor.permute(0, 3, 1, 2)
+        conv_output = self.main_model_conv_branch(grid_input_tensor)  # Shape: (batch_size, grid_size * grid_size * 32)
+
+        # Concatenate the conv_output with the extra_state
+        combined_input = torch.cat([conv_output, extra_input_tensor], dim=1)  # Shape: (batch_size, grid_size * grid_size * 32 + extra_state_size)
+
+        # Process through the fully connected branch
+        output = self.main_model_fc_branch(combined_input)  # Shape: (batch_size, num_actions)
+        return output 
+        
+    def forward_target(self, grid_input_tensor, extra_input_tensor):
+        # Process grid_input through the convolutional branch
+        grid_input_tensor = grid_input_tensor.permute(0, 3, 1, 2)
+        conv_output = self.target_model_conv_branch(grid_input_tensor)  # Shape: (batch_size, grid_size * grid_size * 32)
+
+        # Concatenate the conv_output with the extra_state
+        combined_input = torch.cat([conv_output, extra_input_tensor], dim=1)  # Shape: (batch_size, grid_size * grid_size * 32 + extra_state_size)
+
+        # Process through the fully connected branch
+        output = self.target_model_fc_branch(combined_input)  # Shape: (batch_size, num_actions)
+        return output 
+
+    # update replay memory after every step
+    # transition: (observation, action, reward, new observation, done)
+    def update_replay_memory(self, transition):
+        self.replay_memory.add(transition)
+
+    def train(self, terminal_state):
+        # Start training only if enough samples in replay memory
+        if len(self.replay_memory) < self.minimum_replay_memory_size:           # Only starts training once enough experiences have been collected
+            return None
+
+        # get batch from replay memory
+        importance_weights = None
+        sample_indices = None
+        batch, info = self.replay_memory.sample()       # retrieves sampled experiences, info is for prioritized replay
+        if info is not None:                                                                    # Prioritized Replay
+            importance_weights = info["_weight"]                                                        # |
+            sample_indices = info["index"]
+            current_states = (
+                batch["state"].reshape(self.batch_size, self.num_inputs).to(self.device)
+            )
+            actions = batch["action"].reshape(self.batch_size).to(self.device)
+            rewards = batch["reward"].reshape(self.batch_size).to(self.device)
+            next_states = (
+                batch["next_state"]
+                .reshape(self.batch_size, self.num_inputs)
+                .to(self.device)
+            )
+            dones = batch["done"].reshape(self.batch_size).to(self.device)                      # Prioritized Replay
+
+        else:
+            current_grid_states = torch.stack([
+                torch.tensor(transition[0][0], dtype=torch.float32)  # Extract the (15, 15, 3) array
+                for transition in batch
+            ]).to(self.device)
+
+            # Process the second part of the tuple (7 arrays)
+            current_extra_states = torch.stack([
+                torch.tensor(transition[0][1], dtype=torch.float32)  # Extract the (7,) array
+                for transition in batch
+            ]).to(self.device)
+
+            actions = torch.tensor([transition[1] for transition in batch], dtype=torch.long).to(self.device)
+            
+            rewards = (
+                torch.tensor([transition[2] for transition in batch], dtype=torch.float32)
+                .float()
+                .to(self.device)
+            )
+
+            new_grid_states = torch.stack([
+                torch.tensor(transition[3][0], dtype=torch.float32)  # Extract the (15, 15, 3) array
+                for transition in batch
+            ]).to(self.device)
+
+            # Process the second part of the tuple (7 arrays)
+            new_extra_states = torch.stack([
+                torch.tensor(transition[3][1], dtype=torch.float32)  # Extract the (7,) array
+                for transition in batch
+            ]).to(self.device)
+
+            dones = torch.tensor(
+                [float(transition[4]) for transition in batch],
+                dtype=torch.float32
+            ).to(self.device)
+
+        # get current states from the batch and query into main model
+        current_qs_for_action = (
+            self.forward_main(current_grid_states, current_extra_states).gather(1, actions.unsqueeze(1)).squeeze(1)        # Predict Q-Values for selected actions given states in batch
+        )
+
+        # get future states from minibatch and query from target model
+        with torch.no_grad():                                                                   # Temporarily disables gradient computation
+            if self.double_network:
+                # get future states from minibatch and action indices from main model
+                main_future_best_qs_action_indices = self.forward_main(                         # Find action with highest Q-Value in Next state
+                    new_grid_states, new_extra_states
+                ).argmax(dim=1, keepdim=True)
+                target_q_values = self.forward_target(new_grid_states, new_extra_states)                              # Uses target network to find Q-Value of actions found from above
+                target_selected_q_values = torch.gather(
+                    input=target_q_values,
+                    dim=1,
+                    index=main_future_best_qs_action_indices,
+                ).squeeze()
+                targets = rewards + (                                                           # Updates Q-Value using Bellman Equation
+                    self.discount * target_selected_q_values * (1 - dones)
+                )
+            else:
+                future_best_qs = self.forward_target(new_grid_states, new_extra_states).max(1)[
+                    0
+                ]  # gets max q value from new state
+                targets = rewards + (self.discount * future_best_qs * (1 - dones))
+
+        errors = self.get_errors(                                                               
+            online_output=current_qs_for_action, target_output=targets      # current_qs_for_action:  
+        )                                                                       # estimated earlier by main network (the agent's current estimat of Q-values)
+                                                                            # target_outputs:
+        if importance_weights is not None:                                      # new Q-Values from Bellman
+            loss = torch.mean((errors * importance_weights) ** 2)
+        else:
+            loss = torch.mean(errors**2)                                    # Calculates Loss
+
+        self.replay_memory.set_priorities(sample_indices, errors.detach())  # Upate Priority
+        self.main_optimizer.zero_grad()
+        loss.backward()                                                     # Backpropogation
+        self.main_optimizer.step()                                          # Backpropogation
+
+        # Update target network counter every episode
+        if terminal_state:                                                  # Counts number of episodes
+            self.target_update_counter += 1
+
+        # If counter reaches set value,
+        # update target network with weights of main network
+        if self.target_update_counter > self.update_target_every:           # Update target network to match the main network
+            self.target_model.load_state_dict(self.main_model.state_dict())
+            self.target_update_counter = 0
+
+        return loss.detach()
+
+    def get_errors(self, online_output, target_output):
+        errors = target_output - online_output
+        return errors.float()
+
+    def get_qs(self, grid_state, extra_state):
+        with torch.no_grad():
+            grid_state = grid_state.permute(0, 3, 1, 2)
+
+            conv_output = self.main_model_conv_branch(grid_state)  # Shape: (batch_size, grid_size * grid_size * 32)
+
+            # Concatenate the conv_output with the extra_state
+            combined_input = torch.cat([conv_output, extra_state], dim=1)  # Shape: (batch_size, grid_size * grid_size * 32 + extra_state_size)
+
+            # Process through the fully connected branch
+            output = self.main_model_fc_branch(combined_input)  # Shape: (batch_size, num_actions)
+            return output
 
 class DeepQ(nn.Module):
 
@@ -253,7 +508,65 @@ class DeepQ(nn.Module):
         with torch.no_grad():
             state = state.to(self.device)
             return self.main_model(state)
-        
+
+class DQNAgentConv(Agent):
+    def __init__(self, index, grid_size, extra_state_size, num_hidden_layers, 
+                 action_size, minimum_epsilon: Optional[float] = 0.1, epsilon_decay: Optional[float] = 0.9999
+                 , **dqn_params):
+        """
+        Initialize the DQNAgent with its own DeepQ model and replay buffer.
+        """
+        super().__init__(index=index)  # Initialize the parent Agent class
+
+        self.grid_size = grid_size
+        self.extra_state_size = extra_state_size
+        self.num_hidden_layers = num_hidden_layers
+        self.action_size = action_size
+
+        self.dqn = DeepQConv(
+            grid_size=self.grid_size,
+            extra_state_size=self.extra_state_size,
+            num_hidden_layers=num_hidden_layers, 
+            num_actions=action_size,
+            discount=dqn_params.get("discount", 0.99),
+            replay_memory_size=dqn_params.get("replay_memory_size", 50000),
+            minimum_replay_memory_size=dqn_params.get("minimum_replay_memory_size", 1000),
+            batch_size=dqn_params.get("batch_size", 64),
+            learning_rate=dqn_params.get("learning_rate", 0.001),
+            update_target_every=dqn_params.get("update_target_every", 50),
+            priority_scale=dqn_params.get("priority_scale", 0.6),
+            priority_buffer=dqn_params.get("priority_buffer", False),
+            double_network=dqn_params.get("double_network", True),
+        )
+
+        self.epsilon = 1  # Exploration rate
+        self.epsilon_decay = epsilon_decay
+        self.min_epsilon = minimum_epsilon
+
+    def select_action(self, grid_state, extra_state, explore=True):
+        """
+        Select an action using epsilon-greedy strategy.
+        """
+        if explore: 
+            if np.random.rand() < self.epsilon:
+                #print("                         RANDOM")
+                return np.random.choice(self.action_size)  # Explore
+            grid_state_tensor = torch.tensor(grid_state, dtype=torch.float32) 
+            extra_state_tensor = torch.tensor(extra_state, dtype=torch.float32)                   # Converts state to tensor
+            q_values = self.dqn.get_qs(grid_state_tensor, extra_state_tensor)                                                    # Computes Q-Values using main network
+            return torch.argmax(q_values).item()  # Exploit
+        else:
+            grid_state_tensor = torch.tensor(grid_state, dtype=torch.float32) 
+            extra_state_tensor = torch.tensor(extra_state, dtype=torch.float32)                   # Converts state to tensor
+            q_values = self.dqn.get_qs(grid_state_tensor, extra_state_tensor) 
+            return torch.argmax(q_values).item()  # Exploit    
+
+    def decay_epsilon(self):
+        """
+        Reduce the exploration rate over time.
+        """
+        self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
+
 class DQNAgent(Agent):
     def __init__(self, index, state_size, action_size, epsilon_decay, **dqn_params):
         """

@@ -27,3 +27,5 @@ venv
 multigrid/test_notebooks/*
 
 multigrid/models/*
+
+multigrid/wandb/*
