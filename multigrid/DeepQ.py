@@ -511,7 +511,8 @@ class DeepQ(nn.Module):
 
 class DQNAgentConv(Agent):
     def __init__(self, index, grid_size, extra_state_size, num_hidden_layers, 
-                 action_size, minimum_epsilon, epsilon_decay, **dqn_params):
+                 action_size, minimum_epsilon: Optional[float] = 0.1, epsilon_decay: Optional[float] = 0.9999
+                 , **dqn_params):
         """
         Initialize the DQNAgent with its own DeepQ model and replay buffer.
         """
@@ -542,17 +543,23 @@ class DQNAgentConv(Agent):
         self.epsilon_decay = epsilon_decay
         self.min_epsilon = minimum_epsilon
 
-    def select_action(self, grid_state, extra_state):
+    def select_action(self, grid_state, extra_state, explore=True):
         """
         Select an action using epsilon-greedy strategy.
         """
-        if np.random.rand() < self.epsilon:
-            #print("                         RANDOM")
-            return np.random.choice(self.action_size)  # Explore
-        grid_state_tensor = torch.tensor(grid_state, dtype=torch.float32) 
-        extra_state_tensor = torch.tensor(extra_state, dtype=torch.float32)                   # Converts state to tensor
-        q_values = self.dqn.get_qs(grid_state_tensor, extra_state_tensor)                                                    # Computes Q-Values using main network
-        return torch.argmax(q_values).item()  # Exploit
+        if explore: 
+            if np.random.rand() < self.epsilon:
+                #print("                         RANDOM")
+                return np.random.choice(self.action_size)  # Explore
+            grid_state_tensor = torch.tensor(grid_state, dtype=torch.float32) 
+            extra_state_tensor = torch.tensor(extra_state, dtype=torch.float32)                   # Converts state to tensor
+            q_values = self.dqn.get_qs(grid_state_tensor, extra_state_tensor)                                                    # Computes Q-Values using main network
+            return torch.argmax(q_values).item()  # Exploit
+        else:
+            grid_state_tensor = torch.tensor(grid_state, dtype=torch.float32) 
+            extra_state_tensor = torch.tensor(extra_state, dtype=torch.float32)                   # Converts state to tensor
+            q_values = self.dqn.get_qs(grid_state_tensor, extra_state_tensor) 
+            return torch.argmax(q_values).item()  # Exploit    
 
     def decay_epsilon(self):
         """

@@ -8,6 +8,7 @@ import scripts.utils as u
 
 import os
 import time
+import re
 
 from absl import flags
 from absl import app
@@ -22,7 +23,7 @@ import torch
 FLAGS = flags.FLAGS
 
 # environment options 
-flags.DEFINE_string("render_mode", None, "None for nothing, human for render")
+flags.DEFINE_string("render_mode", 'human', "None for nothing, human for render")
 flags.DEFINE_integer("max_steps", 100, "timesteps for one episode")
 flags.DEFINE_integer("hide_steps", 75, "timesteps to hide")
 flags.DEFINE_integer("seek_steps", 25, "timesteps to seek")
@@ -36,7 +37,7 @@ flags.DEFINE_bool("test", False, "test loaded model")
 
 # rl parameter
 flags.DEFINE_integer("h", 64, "number of hidden layer neurons")
-flags.DEFINE_float("gamma", 0.9, "discount factor for reward")
+flags.DEFINE_float("gamma", 1, "discount factor for reward")
 flags.DEFINE_integer("batch_size", 32, "batch size")
 flags.DEFINE_float("learning_rate", 0.0001, "learning rate")
 flags.DEFINE_integer("replay_memory_size", 200_000, "number of last steps to keep for training")
@@ -48,7 +49,7 @@ flags.DEFINE_bool("double_network", True, "Use double q network")
 
 # training setting
 flags.DEFINE_bool("resume", False, "whether resume from previous checkpoint")
-flags.DEFINE_bool("wb_log", True, "use wb to log")
+flags.DEFINE_bool("wb_log", False, "use wb to log")
 flags.DEFINE_integer("wb_log_interval", 100, "number of episodes to log wb")
 flags.DEFINE_integer("torch_seed", 1, "seed for randomness controlling learning")
 flags.DEFINE_integer("total_eps", 100000, "total training eps")
@@ -56,7 +57,7 @@ flags.DEFINE_integer("total_eps", 100000, "total training eps")
 # test setting
 flags.DEFINE_integer("test_env_seed", 2, "test seed for randomness controlling simulator")
 flags.DEFINE_string("test_model_folder", 
-                    '',
+                    'models/independent/12_10_16_22_37_independent_lr_{}_epsilon_decay_{}_batch_{}_discount_0.0001_replay_mem_0.9999_update_target_32_episode_len_0.9/checkpoint_agent_ep_4200_32',
                     "folder that contains model.pth to test")
 flags.DEFINE_bool("learn_independent", True, "learn independent multiseller product")
 flags.DEFINE_bool("learn_joint_action", False, "learn joint action multiseller product")
@@ -197,7 +198,7 @@ def train_independent(env_config, model_dir):
         while not done: 
             # set up actions dictionary
             for agent in current_states_dict: 
-                action = agent_models[agent].select_action(current_states_dict[0], current_states_dict[1])
+                action = agent_models[agent].select_action(current_states_dict[agent][0], current_states_dict[agent][1])
                 actions[agent] = action
 
             new_state, rewards_dict, terminated_dict, _, _ = full_obs_env.step(actions)
@@ -245,6 +246,7 @@ def train_independent(env_config, model_dir):
             for agent_index in range(FLAGS.num_hiders):
                 agent_rewards = [array[agent_index] for array in last_interval_agent_episode_rewards]
                 agent_model_losses = [array[agent_index] for array in last_interval_episode_losses]
+                print(np.mean(agent_rewards))
                 log_dict[f"Episode average agent {agent_index+1} reward"] = np.mean(agent_rewards)
                 log_dict[f"Episode average loss for agent {agent_index+1}"] = (np.mean(agent_model_losses) if 
                     episode_count * FLAGS.max_steps > FLAGS.minimum_replay_memory_size else None)
@@ -271,7 +273,7 @@ def train_independent(env_config, model_dir):
             epsilon = max(FLAGS.minimum_epsilon, epsilon)
 
         episode_count+=1
-        print(episode_count)
+        print(episode_count) if episode_count % 100 == 0 else None
 
 
 def train_joint(env_config, model_dir):
@@ -370,7 +372,67 @@ def train_joint(env_config, model_dir):
         full_obs_env.close() 
 
 def test(env_config): 
-    pass
+    if FLAGS.learn_independent:
+        test_independent(env_config)
+
+def test_independent(env_config):
+    # set up env 
+    env_config['render_mode'] = 'human'
+    env = HideAndSeekEnv(**env_config)
+    full_obs_env = FullyObsWrapper(env)
+    obs, _ = full_obs_env.reset(seed=FLAGS.test_env_seed)
+
+    # set up device 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
+
+    grid_state, extra_state = u.preprocess_agent_observations(obs)[0]
+    
+    extra_state_size = len(extra_state)
+    
+    # set up actions 
+    valid_actions = [Action.left, Action.right, Action.forward, Action.none]
+    num_actions = len(valid_actions)
+
+    # set up agent models
+    agent_models = {}
+    for filename in os.listdir(FLAGS.test_model_folder):
+        # extract agent number 
+        agent_number = re.search(r'agent_(\d+)\.pth', filename)
+        if agent_number:
+            agent_index = (int(agent_number.group(1)) - 1)
+            # construct full file path 
+            file_path = os.path.join(FLAGS.test_model_folder, filename)
+            checkpoint = torch.load(file_path)
+            model_state_dict = checkpoint['state_dict']
+            # initial model and load it
+            agent_models[agent_index] = DQNAgentConv(index=agent_index, 
+                                                     grid_size=FLAGS.grid_size, 
+                                                     extra_state_size=extra_state_size, 
+                                                     num_hidden_layers=FLAGS.h, 
+                                                     action_size=num_actions)
+            agent_models[agent_index].dqn.to(device)
+            agent_models[agent_index].dqn.main_model.load_state_dict(model_state_dict)
+
+    # initialize epoch 
+    done = False 
+    actions = {}
+
+    current_states_dict = u.preprocess_agent_observations(obs)
+
+    step = 0 
+    while not done: 
+        for agent in current_states_dict: 
+            action = agent_models[agent].select_action(current_states_dict[agent][0], current_states_dict[agent][1])
+            # add to actions dictionary
+            actions[agent] = action
+
+        new_state, rewards_dict, terminated_dict, _ , _ = env.step(actions)
+
+        current_states_dict = u.preprocess_agent_observations(new_state)
+        done = all(terminated_dict.values())
+        step += 1
+
+    full_obs_env.close()
 
 if __name__ == '__main__':
     app.run(main)
