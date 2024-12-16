@@ -102,14 +102,14 @@ class DeepQConv(nn.Module):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.main_model_conv_branch = nn.Sequential(                                # Network Architecture
-            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=3, out_channels=3, kernel_size=5, stride=1, padding=2),
             nn.ReLU(),
             nn.Flatten(),
         ).to(self.device)
 
         self.main_model_fc_branch = nn.Sequential(
-            nn.LayerNorm(self.grid_size * self.grid_size * 32 + self.extra_state_size),
-            nn.Linear(self.grid_size * self.grid_size * 32 + self.extra_state_size, self.num_hidden_layers),
+            nn.LayerNorm(self.grid_size * self.grid_size * 3 + self.extra_state_size),
+            nn.Linear(self.grid_size * self.grid_size * 3 + self.extra_state_size, self.num_hidden_layers),
             nn.ReLU(),
             nn.Linear(self.num_hidden_layers, self.num_hidden_layers),
             nn.ReLU(),
@@ -117,14 +117,14 @@ class DeepQConv(nn.Module):
         ).to(self.device)                                               # Network Architecture
 
         self.target_model_conv_branch = nn.Sequential(                                # Network Architecture
-            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=3, out_channels=3, kernel_size=5, stride=1, padding=2),
             nn.ReLU(),
             nn.Flatten(),
         ).to(self.device)
 
         self.target_model_fc_branch = nn.Sequential(
-            nn.LayerNorm(self.grid_size * self.grid_size * 32 + self.extra_state_size),
-            nn.Linear(self.grid_size * self.grid_size * 32 + self.extra_state_size, self.num_hidden_layers),
+            nn.LayerNorm(self.grid_size * self.grid_size * 3 + self.extra_state_size),
+            nn.Linear(self.grid_size * self.grid_size * 3 + self.extra_state_size, self.num_hidden_layers),
             nn.ReLU(),
             nn.Linear(self.num_hidden_layers, self.num_hidden_layers),
             nn.ReLU(),
@@ -197,7 +197,6 @@ class DeepQConv(nn.Module):
         # Start training only if enough samples in replay memory
         if len(self.replay_memory) < self.minimum_replay_memory_size:           # Only starts training once enough experiences have been collected
             return None
-
         # get batch from replay memory
         importance_weights = None
         sample_indices = None
@@ -223,7 +222,7 @@ class DeepQConv(nn.Module):
                 for transition in batch
             ]).to(self.device)
 
-            # Process the second part of the tuple (7 arrays)
+            # Process the second part of the tuple 
             current_extra_states = torch.stack([
                 torch.tensor(transition[0][1], dtype=torch.float32)  # Extract the (7,) array
                 for transition in batch
@@ -303,7 +302,6 @@ class DeepQConv(nn.Module):
         if self.target_update_counter > self.update_target_every:           # Update target network to match the main network
             self.target_model.load_state_dict(self.main_model.state_dict())
             self.target_update_counter = 0
-
         return loss.detach()
 
     def get_errors(self, online_output, target_output):
@@ -312,13 +310,17 @@ class DeepQConv(nn.Module):
 
     def get_qs(self, grid_state, extra_state):
         with torch.no_grad():
+            # for one evaluation 
+            if grid_state.dim() == 3: 
+                grid_state = grid_state.unsqueeze(0)
+                extra_state = extra_state.unsqueeze(0)
+            
             grid_state = grid_state.permute(0, 3, 1, 2)
 
             conv_output = self.main_model_conv_branch(grid_state)  # Shape: (batch_size, grid_size * grid_size * 32)
 
             # Concatenate the conv_output with the extra_state
             combined_input = torch.cat([conv_output, extra_state], dim=1)  # Shape: (batch_size, grid_size * grid_size * 32 + extra_state_size)
-
             # Process through the fully connected branch
             output = self.main_model_fc_branch(combined_input)  # Shape: (batch_size, num_actions)
             return output
@@ -543,7 +545,7 @@ class DQNAgentConv(Agent):
         self.epsilon_decay = epsilon_decay
         self.min_epsilon = minimum_epsilon
 
-    def select_action(self, grid_state, extra_state, explore=True):
+    def select_action(self, grid_state, extra_state, explore=True, debug=False):
         """
         Select an action using epsilon-greedy strategy.
         """
@@ -559,6 +561,8 @@ class DQNAgentConv(Agent):
             grid_state_tensor = torch.tensor(grid_state, dtype=torch.float32) 
             extra_state_tensor = torch.tensor(extra_state, dtype=torch.float32)                   # Converts state to tensor
             q_values = self.dqn.get_qs(grid_state_tensor, extra_state_tensor) 
+            if debug: 
+                print(f"agent {self.index+1}: {q_values}")
             return torch.argmax(q_values).item()  # Exploit    
 
     def decay_epsilon(self):

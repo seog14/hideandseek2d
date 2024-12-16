@@ -128,17 +128,17 @@ class HideAndSeekEnv(MultiGridEnv):
             order = self.np_random.random(size=self.num_agents).argsort()
 
         # Update agent states, grid states, and reward from actions
-        if self.step_count <= self.hide_steps: 
+        if self.step_count < self.hide_steps: 
             for i in order:
-            
                 if i not in actions:
                     continue
 
                 agent, action = self.agents[i], actions[i]
 
-                assert action == Action.left or action == Action.right or action == Action.forward or action == Action.none
                 if agent.state.terminated:
                     continue
+
+                assert action == Action.left or action == Action.right or action == Action.forward or action == Action.none
 
                 # Rotate left
                 if action == Action.left:
@@ -172,14 +172,17 @@ class HideAndSeekEnv(MultiGridEnv):
                     raise ValueError(f"Unknown action: {action}")
         else: 
             for i in order:
+
                 if i not in actions:
                     continue
 
                 agent, action = self.agents[i], actions[i]
 
-                assert action == Action.left or action == Action.right or action == Action.forward or action == Action.none
                 if agent.state.terminated:
                     continue
+
+                assert action == Action.left or action == Action.right or action == Action.forward or action == Action.none
+
 
                 # Rotate left
                 if action == Action.left:
@@ -213,13 +216,16 @@ class HideAndSeekEnv(MultiGridEnv):
                     else: 
                         if self.step_count == self.max_steps: 
                             rewards[i] = self.calc_manhattan_distance_seeker(agent.state.pos)
-                        rewards[i] += 1
+                            continue
 
                 elif action == Action.none: 
                     continue
 
                 else:
                     raise ValueError(f"Unknown action: {action}")
+
+                if not agent.state.terminated:
+                    rewards[i] += 2
 
         return rewards
     
@@ -269,6 +275,8 @@ class HideAndSeekEnv(MultiGridEnv):
             if self.agents[0].state.pos == self.pressure_plate.cur_pos:
                 self.pressure_plate.is_pressed(True)
                 self.hiding_spot.is_open = True
+                rewards[0] += 2
+                rewards[1] += 2 
 
             positions = [(0, -1), (-1, 0), (1, 0), (0, 1)]
             
@@ -280,7 +288,7 @@ class HideAndSeekEnv(MultiGridEnv):
                     obj.is_open = True
 
         # Seeking Phase
-        if self.step_count >= self.hide_steps:
+        if self.step_count > self.hide_steps:
             agent1_dist = float('inf')
             agent2_dist = float('inf')
 
@@ -300,11 +308,11 @@ class HideAndSeekEnv(MultiGridEnv):
 
             if tuple(self.seeker) == self.agents[0].state.pos and not self.agents[0].state.terminated: 
                 self.agents[0].state.terminated = True # terminate this agent only
-                rewards[0] -= 1 + self.seek_steps
+                rewards[0] -= 2 + self.seek_steps
 
             if tuple(self.seeker) == self.agents[1].state.pos and not self.agents[1].state.terminated: 
                 self.agents[1].state.terminated = True # terminate this agent only
-                rewards[1] -= 1 + self.seek_steps
+                rewards[1] -= 2 + self.seek_steps
 
         
         if self.hiding_spot.is_open: 
