@@ -23,7 +23,7 @@ import torch
 FLAGS = flags.FLAGS
 
 # environment options 
-flags.DEFINE_string("render_mode", 'human', "None for nothing, human for render")
+flags.DEFINE_string("render_mode", None, "None for nothing, human for render")
 flags.DEFINE_integer("max_steps", 100, "timesteps for one episode")
 flags.DEFINE_integer("hide_steps", 75, "timesteps to hide")
 flags.DEFINE_integer("seek_steps", 25, "timesteps to seek")
@@ -43,21 +43,21 @@ flags.DEFINE_float("learning_rate", 0.0001, "learning rate")
 flags.DEFINE_integer("replay_memory_size", 200_000, "number of last steps to keep for training")
 flags.DEFINE_integer("minimum_replay_memory_size", 10_000, "minimum number of steps in memory to start training")
 flags.DEFINE_integer("update_target_every", 500, "number of episodes to take to train target model")
-flags.DEFINE_float("epsilon_decay", 0.9999, "epsilon decay per timestep")
+flags.DEFINE_float("epsilon_decay", 0.999995, "epsilon decay per timestep")
 flags.DEFINE_float("minimum_epsilon", 0.1, "minimum epsilon - cannot decay further")
 flags.DEFINE_bool("double_network", True, "Use double q network")
 
 # training setting
 flags.DEFINE_bool("resume", False, "whether resume from previous checkpoint")
 flags.DEFINE_bool("wb_log", False, "use wb to log")
-flags.DEFINE_integer("wb_log_interval", 100, "number of episodes to log wb")
+flags.DEFINE_integer("wb_log_interval", 250, "number of episodes to log wb")
 flags.DEFINE_integer("torch_seed", 1, "seed for randomness controlling learning")
-flags.DEFINE_integer("total_eps", 100000, "total training eps")
+flags.DEFINE_integer("total_eps", 400000, "total training eps")
 
 # test setting
-flags.DEFINE_integer("test_env_seed", 2, "test seed for randomness controlling simulator")
+flags.DEFINE_integer("test_env_seed", 5, "test seed for randomness controlling simulator")
 flags.DEFINE_string("test_model_folder", 
-                    'models/independent/12_10_16_22_37_independent_lr_{}_epsilon_decay_{}_batch_{}_discount_0.0001_replay_mem_0.9999_update_target_32_episode_len_0.9/checkpoint_agent_ep_4200_32',
+                    'models/independent/12_15_00_34_34_independent_lr_0.0001_epsilon_decay_0.99999_batch_32_discount_1.0_replay_mem_200000_update_target_500_episode_len_100/checkpoint_agent_ep_99000_32',
                     "folder that contains model.pth to test")
 flags.DEFINE_bool("learn_independent", True, "learn independent multiseller product")
 flags.DEFINE_bool("learn_joint_action", False, "learn joint action multiseller product")
@@ -96,8 +96,8 @@ def main(argv):
     
     if FLAGS.train_independent: 
         root_folder = os.path.join(root_folder, 'independent')
-        model_dir = generate_dir_tree(root_folder, 'independent_lr_{}_epsilon_decay_{}_batch_{}' + 
-                                      '_discount_{}_replay_mem_{}_update_target_{}_episode_len_{}'.format(
+        model_dir = generate_dir_tree(root_folder, ('independent_lr_{}_epsilon_decay_{}_batch_{}' + 
+                                      '_discount_{}_replay_mem_{}_update_target_{}_episode_len_{}').format(
                                           u.LR, 
                                           u.EPSILON_DECAY, 
                                           u.BATCH_SIZE, 
@@ -110,8 +110,8 @@ def main(argv):
 
     if FLAGS.train_joint: 
         root_folder = os.path.join(root_folder, 'joint')
-        model_dir = generate_dir_tree(root_folder, 'joint_lr_{}_epsilon_decay_{}_batch_{}' + 
-                                      '_discount_{}_replay_mem_{}_update_target_{}_episode_len_{}'.format(
+        model_dir = generate_dir_tree(root_folder, ('joint_lr_{}_epsilon_decay_{}_batch_{}' + 
+                                      '_discount_{}_replay_mem_{}_update_target_{}_episode_len_{}').format(
                                           u.LR, 
                                           u.EPSILON_DECAY, 
                                           u.BATCH_SIZE, 
@@ -132,7 +132,8 @@ def train_independent(env_config, model_dir):
 
     obs, _ = full_obs_env.reset()
 
-    grid_state, extra_state = u.preprocess_agent_observations(obs)[0]
+    grid_state, extra_state = u.preprocess_agent_observations(obs, 
+                                                              full_obs_env.env.step_count)[0]
     
     extra_state_size = len(extra_state)
     
@@ -173,7 +174,6 @@ def train_independent(env_config, model_dir):
         for agent_id, deep_q_model in agent_models.items():
             wandb.watch(deep_q_model.dqn, idx=agent_id+1)
 
-    epsilon = 1 
     episode_count = 0
     agent_episode_rewards = []
     episode_losses = []
@@ -188,7 +188,8 @@ def train_independent(env_config, model_dir):
         #reset environment and get initial state for seller
         obs, _ = full_obs_env.reset()
 
-        current_states_dict = u.preprocess_agent_observations(obs)
+        current_states_dict = u.preprocess_agent_observations(obs, 
+                                                              full_obs_env.env.step_count)
 
         actions = {}
         first_terminated = {i: False for i in range(FLAGS.num_hiders)}
@@ -203,7 +204,8 @@ def train_independent(env_config, model_dir):
 
             new_state, rewards_dict, terminated_dict, _, _ = full_obs_env.step(actions)
             
-            new_states_dict = u.preprocess_agent_observations(new_state)
+            new_states_dict = u.preprocess_agent_observations(new_state, 
+                                                              full_obs_env.env.step_count)
 
             # Update seller and platform episode rewards and replay memory for training
             for agent in rewards_dict: 
@@ -213,6 +215,7 @@ def train_independent(env_config, model_dir):
 
             # Update replay memory and train main network
             for agent in agent_models:
+                loss = None 
                 if not terminated_dict[agent] or not first_terminated[agent]:
 
                     if terminated_dict[agent]:
@@ -220,17 +223,22 @@ def train_independent(env_config, model_dir):
 
                     current_grid_state, current_extra_state = current_states_dict[agent]
                     new_grid_state, new_extra_state = new_states_dict[agent]
-                    agent_models[agent].dqn.update_replay_memory(((current_grid_state, current_extra_state),
+                    agent_models[agent].dqn.d(((current_grid_state, current_extra_state),
                                                                   actions[agent],
                                                                   rewards_dict[agent], 
                                                                   (new_grid_state, new_extra_state), terminated_dict[agent]))
                     
-                loss = agent_models[agent].dqn.train(terminated_dict[agent])
+                    loss = agent_models[agent].dqn.train(terminated_dict[agent])
                 if loss is not None: 
                     episode_loss[agent] += loss    
 
-            current_grid_state, current_extra_state = new_grid_state, new_extra_state
-        
+            current_states_dict = new_states_dict
+
+        # Decay exploration rate for each agent
+        for agent in agent_models:
+            agent_models[agent].decay_epsilon()
+        # print(agent_episode_reward)
+        # input()
         # Add episode rewards to a list and log stats 
         agent_episode_rewards.append(agent_episode_reward)
         episode_losses.append(episode_loss)
@@ -254,7 +262,7 @@ def train_independent(env_config, model_dir):
             start_time = time.time()
 
         # save models
-        num_save = 2000 // FLAGS.wb_log_interval + 1 
+        num_save = 500 // FLAGS.wb_log_interval + 1 
         if episode_count % (num_save * FLAGS.wb_log_interval) == 0 and episode_count > 10 * FLAGS.wb_log_interval:
             for agent in agent_models:
                 checkpoint = {'state_dict': agent_models[agent].dqn.main_model.state_dict(), 
@@ -266,11 +274,6 @@ def train_independent(env_config, model_dir):
                 if not os.path.isdir(checkpoint_folder):
                     os.makedirs(checkpoint_folder)
                 torch.save(checkpoint, os.path.join(checkpoint_folder, f'agent_{int(agent)+1}.pth'))
-
-        # Decay epsilon 
-        if epsilon > FLAGS.minimum_epsilon:
-            epsilon *= FLAGS.epsilon_decay
-            epsilon = max(FLAGS.minimum_epsilon, epsilon)
 
         episode_count+=1
         print(episode_count) if episode_count % 100 == 0 else None
@@ -385,7 +388,7 @@ def test_independent(env_config):
     # set up device 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
 
-    grid_state, extra_state = u.preprocess_agent_observations(obs)[0]
+    grid_state, extra_state = u.preprocess_agent_observations(obs, full_obs_env.env.step_count)[0]
     
     extra_state_size = len(extra_state)
     
@@ -417,21 +420,29 @@ def test_independent(env_config):
     done = False 
     actions = {}
 
-    current_states_dict = u.preprocess_agent_observations(obs)
-
+    current_states_dict = u.preprocess_agent_observations(obs, full_obs_env.env.step_count)
+    agent_rewards = np.zeros(FLAGS.num_hiders)
     step = 0 
     while not done: 
         for agent in current_states_dict: 
-            action = agent_models[agent].select_action(current_states_dict[agent][0], current_states_dict[agent][1])
+            action = agent_models[agent].select_action(current_states_dict[agent][0], 
+                                                       current_states_dict[agent][1], 
+                                                       explore=False,
+                                                       debug=True)
             # add to actions dictionary
             actions[agent] = action
 
         new_state, rewards_dict, terminated_dict, _ , _ = env.step(actions)
 
-        current_states_dict = u.preprocess_agent_observations(new_state)
+        for agent in rewards_dict: 
+            agent_rewards[agent] += rewards_dict[agent]
+
+        current_states_dict = u.preprocess_agent_observations(new_state, full_obs_env.env.step_count)
         done = all(terminated_dict.values())
         step += 1
 
+    for agent in range(FLAGS.num_hiders):
+        print(f"agent {agent +1} has reward: {agent_rewards[agent]}")
     full_obs_env.close()
 
 if __name__ == '__main__':
