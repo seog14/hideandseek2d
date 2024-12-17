@@ -31,9 +31,10 @@ flags.DEFINE_integer("num_hiders", 2, "number of hiders")
 flags.DEFINE_integer("grid_size", 15, "grid width")
 
 # tining options 
-flags.DEFINE_bool("train_independent", True, "train independent deep q")
+flags.DEFINE_bool("train_independent", False, "train independent deep q")
 flags.DEFINE_bool("train_joint", False, "train joint action deep q")
 flags.DEFINE_bool("test", False, "test loaded model")
+flags.DEFINE_bool("metrics_independent", True, "graph metrics for independent model")
 
 # rl parameter
 flags.DEFINE_integer("h", 64, "number of hidden layer neurons")
@@ -49,7 +50,7 @@ flags.DEFINE_bool("double_network", True, "Use double q network")
 
 # training setting
 flags.DEFINE_bool("resume", False, "whether resume from previous checkpoint")
-flags.DEFINE_bool("wb_log", False, "use wb to log")
+flags.DEFINE_bool("wb_log", True, "use wb to log")
 flags.DEFINE_integer("wb_log_interval", 250, "number of episodes to log wb")
 flags.DEFINE_integer("torch_seed", 1, "seed for randomness controlling learning")
 flags.DEFINE_integer("total_eps", 400000, "total training eps")
@@ -57,7 +58,7 @@ flags.DEFINE_integer("total_eps", 400000, "total training eps")
 # test setting
 flags.DEFINE_integer("test_env_seed", 5, "test seed for randomness controlling simulator")
 flags.DEFINE_string("test_model_folder", 
-                    'models/independent/12_15_00_34_34_independent_lr_0.0001_epsilon_decay_0.99999_batch_32_discount_1.0_replay_mem_200000_update_target_500_episode_len_100/checkpoint_agent_ep_99000_32',
+                    'models/independent/12_15_21_34_48_independent_lr_0.0001_epsilon_decay_0.999995_batch_32_discount_1.0_replay_mem_200000_update_target_500_episode_len_100/checkpoint_agent_ep_324750_32',
                     "folder that contains model.pth to test")
 flags.DEFINE_bool("learn_independent", True, "learn independent multiseller product")
 flags.DEFINE_bool("learn_joint_action", False, "learn joint action multiseller product")
@@ -121,6 +122,9 @@ def main(argv):
                                           u.MAX_STEPS
                                       ))
         train_joint(env_config, model_dir)
+
+    if FLAGS.metrics_independent: 
+        metrics_independent(env_config)
 
 def train_independent(env_config, model_dir): 
     # set up device 
@@ -223,7 +227,7 @@ def train_independent(env_config, model_dir):
 
                     current_grid_state, current_extra_state = current_states_dict[agent]
                     new_grid_state, new_extra_state = new_states_dict[agent]
-                    agent_models[agent].dqn.d(((current_grid_state, current_extra_state),
+                    agent_models[agent].dqn.update_replay_memory(((current_grid_state, current_extra_state),
                                                                   actions[agent],
                                                                   rewards_dict[agent], 
                                                                   (new_grid_state, new_extra_state), terminated_dict[agent]))
@@ -432,7 +436,7 @@ def test_independent(env_config):
             # add to actions dictionary
             actions[agent] = action
 
-        new_state, rewards_dict, terminated_dict, _ , _ = env.step(actions)
+        new_state, rewards_dict, terminated_dict, _ , _ = full_obs_env.step(actions)
 
         for agent in rewards_dict: 
             agent_rewards[agent] += rewards_dict[agent]
@@ -444,6 +448,115 @@ def test_independent(env_config):
     for agent in range(FLAGS.num_hiders):
         print(f"agent {agent +1} has reward: {agent_rewards[agent]}")
     full_obs_env.close()
+
+def metrics_independent(env_config): 
+    # set up env 
+
+    env = HideAndSeekEnv(**env_config)
+    full_obs_env = FullyObsWrapper(env)
+    obs, _ = full_obs_env.reset(seed=FLAGS.test_env_seed)
+    random = 0.2 
+
+    # set up device 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
+
+    grid_state, extra_state = u.preprocess_agent_observations(obs, full_obs_env.env.step_count)[0]
+    
+    extra_state_size = len(extra_state)
+
+    # set up actions 
+    valid_actions = [Action.left, Action.right, Action.forward, Action.none]
+    num_actions = len(valid_actions)
+
+    # set up agent models
+    agent_models = {}
+    for filename in os.listdir(FLAGS.test_model_folder):
+        # extract agent number 
+        agent_number = re.search(r'agent_(\d+)\.pth', filename)
+        if agent_number:
+            agent_index = (int(agent_number.group(1)) - 1)
+            # construct full file path 
+            file_path = os.path.join(FLAGS.test_model_folder, filename)
+            checkpoint = torch.load(file_path)
+            model_state_dict = checkpoint['state_dict']
+            # initial model and load it
+            agent_models[agent_index] = DQNAgentConv(index=agent_index, 
+                                                     grid_size=FLAGS.grid_size, 
+                                                     extra_state_size=extra_state_size, 
+                                                     num_hidden_layers=FLAGS.h, 
+                                                     action_size=num_actions)
+            agent_models[agent_index].dqn.to(device)
+            agent_models[agent_index].dqn.main_model.load_state_dict(model_state_dict)
+            agent_models[agent_index].set_epsilon(random)
+
+    num_simulations = 10000
+
+    agent_rewards_list = np.empty(shape=(num_simulations, FLAGS.num_hiders))
+    agent_time_hidden_list = np.empty(shape=(num_simulations, FLAGS.num_hiders))
+    pressed_plate_list = np.empty(shape=num_simulations)
+    chopped_trees_list = np.empty(shape=num_simulations)
+    spent_together_list = np.empty(shape=num_simulations)
+
+    for index in range(num_simulations):
+        obs, _ = full_obs_env.reset(seed=FLAGS.test_env_seed)
+        done = False 
+        actions = {}
+
+        current_states_dict = u.preprocess_agent_observations(obs, full_obs_env.env.step_count)
+
+        # initialize metrics
+        time_hidden = np.zeros(FLAGS.num_hiders)
+        pressure_plate = 0 
+        chopped_trees = 0 
+        spent_together = 0 
+        agent_reward = np.zeros(FLAGS.num_hiders)
+
+        while not done: 
+            for agent in current_states_dict: 
+                action = agent_models[agent].select_action(current_states_dict[agent][0], 
+                                             current_states_dict[agent][1])
+                actions[agent] = action
+
+            new_state, rewards_dict, done_dict, _, _ = full_obs_env.step(actions)
+
+            # update reward metric
+            for agent in rewards_dict: 
+                agent_reward[agent] += rewards_dict[agent]
+
+            # update time steps alive metric
+            if full_obs_env.env.step_count >= FLAGS.hide_steps:
+                for agent in done_dict: 
+                    if not done_dict[agent]:
+                        time_hidden[agent] += 1 
+            
+            # check if together
+            if full_obs_env.env.agents_together():
+                spent_together += 1 
+
+            # check if pressure plate pressed
+            pressure_plate = int(full_obs_env.env.plate_pressed())
+
+            # check number of trees chopped
+            chopped_trees = full_obs_env.env.num_trees_chopped()
+
+            current_states_dict = u.preprocess_agent_observations(new_state, full_obs_env.env.step_count)
+            done = all(done_dict.values())
+        
+        agent_rewards_list[index] = agent_reward
+        agent_time_hidden_list[index] = time_hidden 
+        pressed_plate_list[index] = pressure_plate
+        chopped_trees_list[index] = chopped_trees
+        spent_together_list[index] = spent_together
+    
+    # Get Metrics 
+    mean_agent_rewards = np.mean(agent_rewards_list, axis=0)
+    mean_agent_time_hidden = np.mean(agent_time_hidden_list, axis=0)
+    mean_pressed_plate = np.mean(pressed_plate_list)
+    mean_chopped_trees = np.mean(chopped_trees_list)
+    mean_spent_together = np.mean(spent_together)
+
+    print(mean_agent_rewards, mean_agent_time_hidden, mean_pressed_plate, mean_chopped_trees, mean_spent_together)
+
 
 if __name__ == '__main__':
     app.run(main)
