@@ -28,6 +28,32 @@ def preprocess_agent_observations(obs, timestep):
     
     return preprocessed_obs
 
+def preprocess_agent_observations_as_vector(obs, timestep):
+    preprocessed_obs = {}
+    for agent in obs:
+        # Extract the grid state and flatten it
+        grid_state = obs[agent]['image']
+        grid_state_flat = grid_state.flatten()
+
+        # Gather and flatten extra state information
+        extra_state_info = [
+            obs[agent]['direction'], 
+            obs[agent]['seeker'], 
+            obs[agent]['curr_pos'], 
+            obs[agent]['other_pos'], 
+            timestep
+        ]
+        extra_state_info = [np.array(x, ndmin=1).flatten() for x in extra_state_info]
+        extra_state_info = np.concatenate(extra_state_info)
+
+        # Concatenate the flattened grid state with the extra info into a single vector
+        full_state = np.concatenate([grid_state_flat, extra_state_info])
+
+        preprocessed_obs[agent] = full_state
+
+    return preprocessed_obs
+
+
 def can_use_gpu() -> bool:
     """
     Return whether or not GPU training is available.

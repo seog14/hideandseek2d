@@ -31,8 +31,8 @@ flags.DEFINE_integer("num_hiders", 2, "number of hiders")
 flags.DEFINE_integer("grid_size", 15, "grid width")
 
 # tining options 
-flags.DEFINE_bool("train_independent", False, "train independent deep q")
-flags.DEFINE_bool("train_joint", False, "train joint action deep q")
+flags.DEFINE_bool("train_independent", False, "train independent deep q")    
+flags.DEFINE_bool("train_joint", True, "train joint action deep q")
 flags.DEFINE_bool("test", False, "test loaded model")
 flags.DEFINE_bool("metrics_independent", True, "graph metrics for independent model")
 
@@ -49,8 +49,11 @@ flags.DEFINE_float("minimum_epsilon", 0.1, "minimum epsilon - cannot decay furth
 flags.DEFINE_bool("double_network", True, "Use double q network")
 
 # training setting
-flags.DEFINE_bool("resume", False, "whether resume from previous checkpoint")
-flags.DEFINE_bool("wb_log", True, "use wb to log")
+flags.DEFINE_bool("resume", True, "whether resume from previous checkpoint")
+flags.DEFINE_string("train_model_folder",
+                    'models/joint/12_16_11_21_33_joint_lr_0.0001_epsilon_decay_0.999995_batch_32_discount_1.0_replay_mem_200000_update_target_500_episode_len_100/checkpoint_agent_ep_21196_32',
+                    "folder that contains model.pth to test")
+flags.DEFINE_bool("wb_log", True, "use wb to log")                          # Sets whether waits and biases is on
 flags.DEFINE_integer("wb_log_interval", 250, "number of episodes to log wb")
 flags.DEFINE_integer("torch_seed", 1, "seed for randomness controlling learning")
 flags.DEFINE_integer("total_eps", 400000, "total training eps")
@@ -60,8 +63,8 @@ flags.DEFINE_integer("test_env_seed", 5, "test seed for randomness controlling s
 flags.DEFINE_string("test_model_folder", 
                     'models/independent/12_15_21_34_48_independent_lr_0.0001_epsilon_decay_0.999995_batch_32_discount_1.0_replay_mem_200000_update_target_500_episode_len_100/checkpoint_agent_ep_324750_32',
                     "folder that contains model.pth to test")
-flags.DEFINE_bool("learn_independent", True, "learn independent multiseller product")
-flags.DEFINE_bool("learn_joint_action", False, "learn joint action multiseller product")
+flags.DEFINE_bool("learn_independent", False, "learn independent multiseller product")
+flags.DEFINE_bool("learn_joint_action", True, "learn joint action multiseller product")
 flags.DEFINE_bool("plot_epoch", True, "whether plot agent activity per epoch")
 
 def main(argv): 
@@ -284,99 +287,219 @@ def train_independent(env_config, model_dir):
 
 
 def train_joint(env_config, model_dir):
-    if __name__ == "__main__":
-        # Define environment parameters
-        grid_size = 7                                                                           # PREDEFINED ENV SIZE
-        num_agents = 2
-        state_size = grid_size * grid_size * 3 + 8 # 3 channels per grid cell, 1 directions, 1 mission, 2 seeker pos, 2 agent pos, 2 other agent pos 
-        action_size = 3                                                                         # PREDEFINED ACTION SIZE
-        # Training loop
-        episodes = 500                                       # Number of Episodes to do
+    # set up device 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(device)
+    # Extract parameters from env_config or FLAGS
+    #grid_size = env_config.get('grid_size', 7)
+    #num_agents = env_config.get('num_hiders', 2)
 
+    env = HideAndSeekEnv(**env_config)
+    full_obs_env = FullyObsWrapper(env)
+    
+    obs, _ = full_obs_env.reset()
+    initial_state = u.preprocess_agent_observations_as_vector(obs, 
+                                                          full_obs_env.env.step_count)[0]
+    
+    state_size = len(initial_state)
+    
+    # set up actions 
+    valid_actions = [Action.left, Action.right, Action.forward, Action.none]
+    num_actions = len(valid_actions)
 
-        # Initialize agents with DeepJointQ
-        agents = [
-            DeepJointQNAgent(index=i, state_size=state_size, action_size=action_size, num_agents=num_agents, 
-                             agent_indexes = [j for j in range(num_agents) if j != i], 
-                             epsilon_decay = u.EPSILON_DECAY, batch_size = u.BATCH_SIZE, update_target_every = u.UPDATE_TARGET_EVERY, discount=u.GAMMA, replay_memory_size = u.REPLAY_MEMORY_SIZE)
-            for i in range(num_agents)
-        ]
-        
-        # Create the environment
-        non_obs_env = HideAndSeekEnv(grid_size=grid_size, agents=agents, render_mode=env_config['render_mode'])
-        full_obs_env = FullyObsWrapper(non_obs_env)
-        
-        all_total_rewards = [[] for _ in range(num_agents)]  # Separate list for each agent
-        all_episodes = []
+    # Initialize agents
+    agent_models = {}
+    for i in range(FLAGS.num_hiders):
+        agent_models[i] = DeepJointQNAgent(
+            index=i,
+            state_size=state_size,
+            action_size=num_actions,
+            num_agents=FLAGS.num_hiders,
+            agent_indexes=[j for j in range(FLAGS.num_hiders) if j != i],
+            epsilon_decay=u.EPSILON_DECAY,
+            discount=u.GAMMA,
+            replay_memory_size=u.REPLAY_MEM_SIZE,
+            minimum_replay_memory_size=u.MIN_REPLAY_MEM_SIZE,
+            batch_size=u.BATCH_SIZE,
+            learning_rate=u.LR,
+            update_target_every=u.UPDATE_TARGET_EVERY,
+            double_network=True,
+        )
+        agent_models[i].dqn.to(device)
 
-        for episode in range(episodes):
-            # Initialize variables for the episode
-            steps = 0
-            obs, infos = full_obs_env.reset()
-            total_rewards = [0] * num_agents
-            terminations = {agent.index: False for agent in agents}
-
-            while not full_obs_env.env.is_done():            # Main training loop                             #HEY LOOK HERE#
-                actions = {}
-                for agent in agents:
-                    if not terminations[agent.index]:
-                        agent_image = obs[agent.index]["image"].flatten()  # Flattened image observation
-
-                        agent_direction = np.array([obs[agent.index]["direction"]])   # Direction as an integer
-
-                        agent_mission = np.array([obs[agent.index]["mission"]])
-
-                        seeker_pos = obs[agent.index]["seeker"].flatten()
-
-                        agent_pos = obs[agent.index]["curr_pos"].flatten()
-                        other_agent_pos = obs[agent.index]["other_pos"].flatten()
-
-                        # Concatenate the flattened image with the one-hot direction
-                        agent_state = np.concatenate([agent_image, agent_direction, agent_mission, seeker_pos, agent_pos, other_agent_pos])
-                        actions[agent.index] = agent.select_action(agent_state)  # Action selection
-                    else:
-                        actions[agent.index] = None
-
-                # Step the environment
-                obs, rewards, terminations, truncations, infos = full_obs_env.step(actions)
-                steps += 1
-                # Update replay memory and train each agent
-                for agent in agents:
-                    if not terminations[agent.index]:
-                        next_agent_image = obs[agent.index]["image"].flatten()  # Flattened image observation
-                        next_agent_direction = np.array([obs[agent.index]["direction"]])   # Direction as an integer
-
-                        next_agent_mission = np.array([obs[agent.index]['mission']])
-
-                        next_seeker_pos = obs[agent.index]["seeker"]
-
-                        next_agent_pos = obs[agent.index]["curr_pos"]
-                        next_other_agent_pos = obs[agent.index]["other_pos"]
-
-                        # Concatenate the flattened image with the one-hot direction
-                        next_state = np.concatenate([next_agent_image, next_agent_direction, next_agent_mission, next_seeker_pos, next_agent_pos, next_other_agent_pos])
-                        agent.dqn.update_replay_memory(
-                            (agent_state, actions[agent.index], rewards[agent.index], next_state, terminations[agent.index])
-                        )
-                        loss = agent.dqn.train(terminal_state=torch.tensor(terminations[agent.index], dtype=torch.float32).unsqueeze(0))
-                        total_rewards[agent.index] += rewards[agent.index]
-                # Render environment (optional)
-                full_obs_env.render()
-
-            # Decay exploration rate for each agent
-            for agent in agents:
-                agent.decay_epsilon()
+    # If resuming, load checkpoints
+    if FLAGS.resume:
+        for filename in os.listdir(FLAGS.train_model_folder):
+            agent_number = re.search(r'agent_(\d+)\.pth', filename)
+            if agent_number:
+                agent_index = int(agent_number.group(1)) - 1
+                file_path = os.path.join(FLAGS.train_model_folder, filename)
+                checkpoint = torch.load(file_path)
+                model_state_dict = checkpoint['state_dict']
                 
-            # Print training episode results
-            print(f"Episode {episode + 1}: Total Rewards = {total_rewards} Epsilon = {agent.epsilon}")
+                # Just load the state into the already defined agent
+                agent_models[agent_index].dqn.value_network.load_state_dict(model_state_dict)
                 
-            for i, reward in enumerate(total_rewards):
-                all_total_rewards[i].append(reward)
+                if 'optimizer' in checkpoint:
+                    agent_models[agent_index].dqn.value_network_optimizer.load_state_dict(checkpoint['optimizer'])
 
-            all_episodes.append(episode + 1)
+                agent_models[agent_index].dqn.to(device)
+                agent_models[agent_index].dqn.value_network.load_state_dict(model_state_dict)
 
-        # Close the environment
-        full_obs_env.close() 
+    # Initialize wandb logging
+    if FLAGS.wb_log:
+        if FLAGS.resume:
+            wandb.init(
+                project='hideandseek2d',
+                id='b35rxjqh',  
+                resume='must'
+            )
+        else:
+            wandb.init(
+                name=("joint_num_hidden_{}_lr_{}_epsilon_decay_{}_batch_{}" +
+                      "_discount_{}_replay_mem_{}_update_target_{}_episode_len_{}").format(
+                      FLAGS.h, FLAGS.learning_rate, FLAGS.epsilon_decay, FLAGS.batch_size,
+                      FLAGS.gamma, FLAGS.replay_memory_size, FLAGS.update_target_every,
+                      FLAGS.max_steps),
+                project='hideandseek2d')
+
+        wandb.define_metric("episodes")
+        wandb.define_metric("*", step_metric="episodes")
+        for agent_id, deep_q_model in agent_models.items():
+            wandb.watch(deep_q_model.dqn, idx=agent_id+1)
+
+    episode_count = 21700
+    agent_episode_rewards = []
+    episode_losses = []
+    start_time = time.time()
+    # all_total_rewards = [[] for _ in range(FLAGS.num_hiders)]
+    # start_time = time.time()
+
+    # main loop for model inference and update
+    while episode_count < FLAGS.total_eps:
+        #print("Start Episode")
+        agent_episode_reward = np.zeros(FLAGS.num_hiders)
+        episode_loss = np.zeros(FLAGS.num_hiders)
+        
+        obs, _ = full_obs_env.reset()
+        
+        current_states_dict = u.preprocess_agent_observations_as_vector(obs, 
+                                                              full_obs_env.env.step_count)
+        #total_rewards = [0]*FLAGS.num_hiders
+        actions = {}
+        first_terminated = {i: False for i in range(FLAGS.num_hiders)}
+        #terminations = {agent.index: False for agent in agent_models}
+
+        done = False
+        while not done:
+            #print("STEP")
+            # Select actions for each agent
+            for agent in current_states_dict:
+                if not first_terminated[agent]:                           # Independent isn't using this
+                    action = agent_models[agent].select_action(current_states_dict[agent]) # , current_states_dict[agent][1])
+                    actions[agent] = action                                                 # NEED TO CHANGE PREPROCESSING???^^^
+                else:
+                    actions[agent] = None
+
+            new_obs, rewards_dict, terminated_dict, _, _ = full_obs_env.step(actions)
+            new_states_dict = u.preprocess_agent_observations_as_vector(new_obs, 
+                                                              full_obs_env.env.step_count)
+
+            # Update seller and platform episode rewards and replay memory for training
+            for agent in rewards_dict: 
+                agent_episode_reward[agent] += rewards_dict[agent]
+                
+            done = all(terminated_dict.values())
+
+            # Update replay memory and train
+            for agent in agent_models:
+                loss = None
+                if not terminated_dict[agent] or not first_terminated[agent]:
+                    
+                    if terminated_dict[agent]:
+                        first_terminated[agent] = True
+
+                    current_state = current_states_dict[agent]
+                    new_state = new_states_dict[agent]
+
+                    # Construct joint transition:
+                    # We need other agent actions (excluding current agent)
+                    other_actions = []
+                    for other_idx in range(FLAGS.num_hiders):
+                        if other_idx != agent:
+                            # If the other agent terminated, their action is None,
+                            # we can treat it as a no-op or a placeholder.
+                            # For joint action framework, let's default to 0 if None:
+                            other_actions.append(actions[other_idx] if actions[other_idx] is not None else 0)
+                    other_actions = np.array(other_actions, dtype=np.int64)
+
+                    agent_models[agent].dqn.update_replay_memory(
+                        (current_state,
+                         actions[agent],
+                         other_actions,
+                         rewards_dict[agent],
+                         new_state,
+                         terminated_dict[agent])
+                    )
+
+                    loss, loss_policy = agent_models[agent].dqn.train(terminal_state=terminated_dict[agent])
+                    if loss is not None:
+                        episode_loss[agent] += loss
+                        
+                    #total_rewards[agent.index] += rewards_dict[agent.index]
+
+            current_states_dict = new_states_dict
+
+        # Decay epsilon
+        for agent in agent_models:
+            agent_models[agent].decay_epsilon()
+
+        # Log results if desired
+        #print(f"Episode {episode+1}: Total Rewards = {total_rewards}")
+
+        # for i, reward in enumerate(total_rewards):
+        #     all_total_rewards[i].append(reward)
+        
+        # Add episode rewards to a list and log stats 
+        agent_episode_rewards.append(agent_episode_reward)
+        episode_losses.append(episode_loss)
+        if FLAGS.wb_log and episode_count % FLAGS.wb_log_interval == 0 and episode_count >= FLAGS.wb_log_interval: 
+            log_dict = {
+                "Episode average time": (time.time()-start_time)/FLAGS.wb_log_interval,
+                "episodes": episode_count
+            }
+
+            # add seller rewards and seller model loss to log_dict
+            last_interval_agent_episode_rewards =  agent_episode_rewards[-FLAGS.wb_log_interval:]
+            last_interval_episode_losses = episode_losses[-FLAGS.wb_log_interval:]
+            for agent_index in range(FLAGS.num_hiders):
+                agent_rewards = [array[agent_index] for array in last_interval_agent_episode_rewards]
+                agent_model_losses = [array[agent_index] for array in last_interval_episode_losses]
+                print(np.mean(agent_rewards))
+                log_dict[f"Episode average agent {agent_index+1} reward"] = np.mean(agent_rewards)
+                log_dict[f"Episode average loss for agent {agent_index+1}"] = (np.mean(agent_model_losses) if 
+                    episode_count * FLAGS.max_steps > FLAGS.minimum_replay_memory_size else None)
+            wandb.log(log_dict)
+            start_time = time.time()
+
+        # save models
+        num_save = 500 // FLAGS.wb_log_interval + 1 
+        #if episode_count % (num_save * FLAGS.wb_log_interval) == 0 and episode_count > 10 * FLAGS.wb_log_interval:
+        for agent in agent_models:
+            checkpoint = {'state_dict': agent_models[agent].dqn.value_network.state_dict(), 
+                            'optimizer': agent_models[agent].dqn.value_network_optimizer.state_dict()}
+            checkpoint_folder_name = 'checkpoint_agent_ep_{}_{}'.format(episode_count, 
+                                                                        FLAGS.batch_size, 
+                                                                        FLAGS.learning_rate)
+            checkpoint_folder = os.path.join(model_dir, checkpoint_folder_name)
+            if not os.path.isdir(checkpoint_folder):
+                os.makedirs(checkpoint_folder)
+            torch.save(checkpoint, os.path.join(checkpoint_folder, f'agent_{int(agent)+1}.pth'))
+
+        episode_count+=1
+        print(episode_count) if episode_count % 100 == 0 else None
+
+    #full_obs_env.close() 
 
 def test(env_config): 
     if FLAGS.learn_independent:

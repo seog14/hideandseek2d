@@ -9,6 +9,8 @@ from multigrid.core.agent import Agent
 
 import itertools
 
+import random
+
 class ReplayBuffer:
     def __init__(                                                    # Why was this init and not __init__
         self,
@@ -269,13 +271,13 @@ class DeepQ_Joint_Action(nn.Module):
         # get batch from replay memory
         batch, _ = self.replay_memory.sample()
 
-        current_states = torch.stack([transition[0] for transition in batch])
+        current_states = torch.stack([torch.tensor(transition[0], dtype=torch.float32) for transition in batch])
         actions = torch.tensor([transition[1] for transition in batch])
-        other_actions = torch.stack([transition[2] for transition in batch]).to(
+        other_actions = torch.stack([torch.tensor(transition[2], dtype=torch.float32) for transition in batch]).to(
             torch.int64
         )  # added as tensor
         rewards = torch.tensor([transition[3] for transition in batch]).float()
-        next_states = torch.stack([transition[4] for transition in batch])
+        next_states = torch.stack([torch.tensor(transition[4], dtype = torch.float32) for transition in batch])
         dones = torch.tensor([transition[5] for transition in batch]).float()
 
         # concatenate current_state as well as actions taken by the other agents
@@ -397,7 +399,7 @@ class DeepJointQNAgent(Agent):
             num_sellers= num_agents,
             seller_index = agent_indexes,
         )
-        self.epsilon = .99  # Exploration rate
+        self.epsilon = .9  # Exploration rate
         self.epsilon_decay = epsilon_decay
         self.min_epsilon = 0.00
 
