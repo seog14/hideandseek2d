@@ -47,7 +47,7 @@ class HideAndSeekEnv(MultiGridEnv):
         self.shelter_time = shelter_time
         self.seeker = [np.int_(size // 2), np.int_(size // 2)]  # starts out in center!
         self.grid_template = gen_env.gen_environment(self.size, percent_trees)
-       
+        self.trees_chopped = 0 
         super().__init__(
             agents=num_agents,
             agent_view_size=self.size,
@@ -88,7 +88,9 @@ class HideAndSeekEnv(MultiGridEnv):
         for agent in self.agents:
             agent.state.pos = self.seeker
             agent.state.dir = Direction.up
-        
+
+        self.trees_chopped = 0 
+
 
 
     def gen_obs(self):
@@ -286,6 +288,7 @@ class HideAndSeekEnv(MultiGridEnv):
                 obj = self.grid.get(new_pos[0], new_pos[1])
                 if obj is not None and obj.type == Type.tree and not obj.is_open:  
                     obj.is_open = True
+                    self.trees_chopped += 1
 
         # Seeking Phase
         if self.step_count > self.hide_steps:
@@ -388,3 +391,20 @@ class HideAndSeekEnv(MultiGridEnv):
         elif self.render_mode == 'rgb_array':
             return img
     
+    def agents_together(self):
+        position = None 
+
+        for agent in self.agents: 
+            if position is not None: 
+                if agent.state.pos != position: 
+                    return False 
+            else: 
+                position = agent.state.pos
+
+        return True
+
+    def plate_pressed(self):
+        return self.pressure_plate.is_pressed
+    
+    def num_trees_chopped(self):
+        return self.trees_chopped

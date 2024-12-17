@@ -570,6 +570,9 @@ class DQNAgentConv(Agent):
         Reduce the exploration rate over time.
         """
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
+    
+    def set_epsilon(self, epsilon):
+        self.epsilon = epsilon
 
 class DQNAgent(Agent):
     def __init__(self, index, state_size, action_size, epsilon_decay, **dqn_params):
