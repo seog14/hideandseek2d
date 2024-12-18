@@ -327,6 +327,8 @@ class HideAndSeekEnv(MultiGridEnv):
 
         observations = self.gen_obs()
 
+        if truncated:
+            terminations = {agent_id: True for agent_id in truncations}
         return observations, rewards, terminations, truncations, defaultdict(dict)
    
     def render(self):
