@@ -379,7 +379,9 @@ class DeepQ_Joint_Action(nn.Module):
         
 
 class DeepJointQNAgent(Agent):
-    def __init__(self, index, state_size, action_size, num_agents, agent_indexes, epsilon_decay,**dqn_params):
+    def __init__(self, index, state_size, action_size, num_agents, agent_indexes, 
+                 minimum_epsilon: Optional[float] = 0.1, 
+                 epsilon_decay: Optional[float] = 0.999995,**dqn_params):
         """
         Initialize the DQNAgent with its own DeepQ model and replay buffer.
         """
@@ -399,23 +401,32 @@ class DeepJointQNAgent(Agent):
             num_sellers= num_agents,
             seller_index = agent_indexes,
         )
-        self.epsilon = .9  # Exploration rate
+        self.epsilon = 1  # Exploration rate
         self.epsilon_decay = epsilon_decay
-        self.min_epsilon = 0.00
+        self.min_epsilon = 0.2
 
-    def select_action(self, state):
+    def select_action(self, state, explore=True):
         """
         Select an action using epsilon-greedy strategy.
         """
-        if np.random.rand() < self.epsilon:
-            #print("                         RANDOM")
-            return np.random.choice(self.action_size)  # Explore
-        state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)                        # Converts state to tensor
-        q_values = self.dqn.get_qs(state_tensor)                                                    # Computes Q-Values using main network
-        return torch.argmax(q_values).item()  # Exploit
+
+        if explore: 
+            if np.random.rand() < self.epsilon:
+                #print("                         RANDOM")
+                return np.random.choice(self.action_size)  # Explore
+            state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)                        # Converts state to tensor
+            q_values = self.dqn.get_qs(state_tensor)                                                    # Computes Q-Values using main network
+            return torch.argmax(q_values).item()  # Exploit
+        else:
+            state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)                        # Converts state to tensor
+            q_values = self.dqn.get_qs(state_tensor)                                                    # Computes Q-Values using main network
+            return torch.argmax(q_values).item()  # Exploit
 
     def decay_epsilon(self):
         """
         Reduce the exploration rate over time.
         """
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
+
+    def set_epsilon(self, epsilon):
+        self.epsilon = epsilon
